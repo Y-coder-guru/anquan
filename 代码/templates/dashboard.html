@@ -113,6 +113,8 @@
                     </div>
                     <div class="video-box">
                         <img id="cameraStream" alt="人脸监控视频流" src="{{ url_for('camera_offline') }}">
+                        <video id="localCameraVideo" autoplay playsinline muted hidden></video>
+                        <canvas id="clientFrameCanvas" width="640" height="480" hidden></canvas>
                     </div>
                     <div class="face-stat-grid">
                         <article><span>当前人脸</span><strong id="faceCurrentCount">0</strong></article>
@@ -162,6 +164,8 @@
                 <article><span>授权人脸</span><strong id="statKnownFaces">--</strong></article>
                 <article><span>陌生人脸</span><strong id="statUnknownFaces">--</strong></article>
                 <article><span>陌生报警累计</span><strong id="statStrangerAlerts">--</strong></article>
+                <article><span>历史快照</span><strong id="statHistory">--</strong></article>
+                <article><span>最近保存</span><strong id="statSavedAt">--</strong></article>
             </div>
             <section class="panel radar-panel">
                 <div class="panel-title row-title">

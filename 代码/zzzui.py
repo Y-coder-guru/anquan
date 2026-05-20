@@ -18,25 +18,33 @@ import time
 import traceback
 import urllib.parse
 from datetime import datetime
+import base64
+import atexit
 
 import requests
 from flask import Flask, Response, jsonify, redirect, render_template, request, send_file, session, url_for
 
 try:
     import cv2
+    import numpy as np
 except ModuleNotFoundError:
     cv2 = None
+    np = None
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FACE_DB_FILE = os.path.join(BASE_DIR, "lab_members.pkl")
 USER_DB_FILE = os.path.join(BASE_DIR, "users.pkl")
+APP_STATE_FILE = os.path.join(BASE_DIR, "app_state.json")
 
 TOLERANCE = 60
 ALARM_INTERVAL = 30
 LOG_LIMIT = 300
 CAMERA_INDEX = 0
 PUSH_ENABLED = True
+STATE_SAVE_INTERVAL = 8
+SENSOR_HISTORY_INTERVAL = 30
+SENSOR_HISTORY_LIMIT = 720
 
 web_app = Flask(__name__, template_folder="templates", static_folder="static")
 web_app.secret_key = "zhixunweishi_secret_key_2024"
@@ -156,6 +164,10 @@ monitor_data = {
 face_members = {}
 last_alarm_time = {}
 system_logs = []
+sensor_history = []
+state_dirty = False
+last_state_save = 0
+service_started = False
 data_lock = threading.RLock()
 
 
@@ -172,11 +184,14 @@ def safe_print(text=""):
 
 
 def add_log(message):
-    entry = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "message": message}
+    entry = {"time": current_time_text(), "message": message}
     with data_lock:
         system_logs.insert(0, entry)
         del system_logs[LOG_LIMIT:]
+        mark_state_dirty()
     safe_print(f"[{entry['time']}] {message}")
+    if service_started:
+        save_app_state(force=True)
 
 
 def load_user_database():
@@ -227,6 +242,140 @@ def load_members():
 def save_members():
     with open(FACE_DB_FILE, "wb") as f:
         pickle.dump(face_members, f)
+
+
+def current_time_text():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def mark_state_dirty():
+    global state_dirty
+    state_dirty = True
+
+
+def sync_runtime_globals(service_instance):
+    global TOLERANCE, ALARM_INTERVAL, LOG_LIMIT, CAMERA_INDEX, PUSH_ENABLED
+    settings = service_instance.settings
+    TOLERANCE = float(settings.get("tolerance", TOLERANCE))
+    ALARM_INTERVAL = int(settings.get("alarm_interval", ALARM_INTERVAL))
+    LOG_LIMIT = int(settings.get("log_limit", LOG_LIMIT))
+    CAMERA_INDEX = int(settings.get("camera_index", CAMERA_INDEX))
+    PUSH_ENABLED = bool(settings.get("push_enabled", PUSH_ENABLED))
+    BARK_KEYS[1] = settings.get("bark_key", BARK_KEYS[1])
+    PUSH_CONFIG[1]["key"] = BARK_KEYS[1]
+
+
+def clean_record_list(records, limit):
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][:limit]
+
+
+def build_persistent_state(service_instance):
+    sensor_keys = [key for key, *_ in SENSOR_DEFINITIONS]
+    return {
+        "version": 1,
+        "saved_at": current_time_text(),
+        "settings": dict(getattr(service_instance, "settings", {})),
+        "thresholds": dict(getattr(service_instance, "thresholds", DEFAULT_THRESHOLDS)),
+        "system_logs": list(system_logs[:LOG_LIMIT]),
+        "sensor_history": list(sensor_history[:SENSOR_HISTORY_LIMIT]),
+        "sensor_values": {key: monitor_data.get(key) for key in sensor_keys},
+        "monitor_data": {
+            "alert_history": list(monitor_data["alert_history"]),
+            "action_history": list(monitor_data["action_history"]),
+            "stranger_alarm_count": int(monitor_data.get("stranger_alarm_count", 0)),
+            "last_stranger_time": monitor_data.get("last_stranger_time", "--"),
+            "last_face_event": monitor_data.get("last_face_event", "暂无人脸事件")
+        }
+    }
+
+
+def save_app_state(force=False):
+    global state_dirty, last_state_save
+    now = time.time()
+    with data_lock:
+        if not force and not state_dirty:
+            return
+        if not force and now - last_state_save < STATE_SAVE_INTERVAL:
+            return
+        payload = build_persistent_state(globals().get("service"))
+        state_dirty = False
+        last_state_save = now
+    tmp_file = f"{APP_STATE_FILE}.tmp"
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, APP_STATE_FILE)
+    except Exception as exc:
+        with data_lock:
+            state_dirty = True
+        safe_print(f"状态文件保存失败: {exc}")
+
+
+def load_app_state(service_instance):
+    global system_logs, sensor_history, state_dirty, last_state_save
+    if not os.path.exists(APP_STATE_FILE):
+        return
+    try:
+        with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as exc:
+        safe_print(f"状态文件读取失败: {exc}")
+        return
+
+    restored_safe_values = False
+    with data_lock:
+        settings = payload.get("settings")
+        if isinstance(settings, dict):
+            service_instance.settings.update({
+                key: value for key, value in settings.items()
+                if key in service_instance.settings
+            })
+        thresholds = payload.get("thresholds")
+        if isinstance(thresholds, dict):
+            for key in DEFAULT_THRESHOLDS:
+                if key in thresholds:
+                    try:
+                        service_instance.thresholds[key] = float(thresholds[key])
+                    except (TypeError, ValueError):
+                        pass
+        sync_runtime_globals(service_instance)
+        service_instance.sync_threshold_rules()
+
+        system_logs[:] = clean_record_list(payload.get("system_logs"), LOG_LIMIT)
+        sensor_history[:] = clean_record_list(payload.get("sensor_history"), SENSOR_HISTORY_LIMIT)
+
+        persisted_monitor = payload.get("monitor_data", {})
+        if isinstance(persisted_monitor, dict):
+            monitor_data["alert_history"] = clean_record_list(persisted_monitor.get("alert_history"), 300)[:60]
+            monitor_data["action_history"] = clean_record_list(persisted_monitor.get("action_history"), 160)[:40]
+            monitor_data["stranger_alarm_count"] = int(persisted_monitor.get("stranger_alarm_count", 0) or 0)
+            monitor_data["last_stranger_time"] = persisted_monitor.get("last_stranger_time", "--") or "--"
+            monitor_data["last_face_event"] = persisted_monitor.get("last_face_event", "暂无人脸事件") or "暂无人脸事件"
+
+        sensor_values = payload.get("sensor_values")
+        if isinstance(sensor_values, dict):
+            sensor_keys = [key for key, *_ in SENSOR_DEFINITIONS]
+            candidate = {key: monitor_data[key] for key in sensor_keys}
+            for key in sensor_keys:
+                if key in sensor_values:
+                    try:
+                        candidate[key] = float(sensor_values[key])
+                    except (TypeError, ValueError):
+                        pass
+            if evaluate_accident(candidate) is None:
+                monitor_data.update(candidate)
+                restored_safe_values = True
+
+        service_instance.stranger_alarm_count = int(monitor_data.get("stranger_alarm_count", 0))
+        service_instance.last_stranger_time = monitor_data.get("last_stranger_time", "--")
+        service_instance.last_face_event = monitor_data.get("last_face_event", "暂无人脸事件")
+        state_dirty = False
+        last_state_save = time.time()
+
+    restored_text = "已恢复上次安全范围内的监测快照" if restored_safe_values else "已恢复历史记录与系统设置"
+    safe_print(restored_text)
 
 
 def extract_face_feature(face_gray):
@@ -286,9 +435,11 @@ class LabSafetyService:
         self.current_level = 0
         self.current_accident = "无"
         self.last_sensor_snapshot = []
+        self.last_history_time = 0
         self.last_push_time = 0
         self.camera = None
         self.camera_running = False
+        self.camera_source = "none"
         self.camera_lock = threading.RLock()
         self.camera_thread = None
         self.face_cascade = None
@@ -319,6 +470,9 @@ class LabSafetyService:
         self.thresholds = DEFAULT_THRESHOLDS.copy()
 
     def start(self):
+        global service_started
+        service_started = True
+        load_app_state(self)
         load_user_database()
         load_members()
         add_log("🚀 Flask Web 监控服务已启动")
@@ -348,8 +502,27 @@ class LabSafetyService:
                 monitor_data["last_stranger_time"] = self.last_stranger_time
                 monitor_data["stranger_alarm_count"] = self.stranger_alarm_count
                 monitor_data["camera_running"] = self.camera_running
+                monitor_data["camera_source"] = self.camera_source
                 monitor_data["camera_error"] = self.camera_error
+            self.record_sensor_history()
+            save_app_state()
             time.sleep(1)
+
+    def record_sensor_history(self):
+        now = time.time()
+        if now - self.last_history_time < SENSOR_HISTORY_INTERVAL:
+            return
+        rows = self.sensor_rows()
+        with data_lock:
+            sensor_history.insert(0, {
+                "time": current_time_text(),
+                "risk_level": monitor_data.get("risk_level", 0),
+                "accident_type": monitor_data.get("accident_type", "无"),
+                "rows": rows
+            })
+            del sensor_history[SENSOR_HISTORY_LIMIT:]
+            mark_state_dirty()
+        self.last_history_time = now
 
     def analyze_risk_loop(self):
         while self.running:
@@ -461,11 +634,35 @@ class LabSafetyService:
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.camera = cap
         self.camera_running = True
+        self.camera_source = "server"
         self.camera_error = ""
         self.camera_thread = threading.Thread(target=self.camera_loop, daemon=True)
         self.camera_thread.start()
         add_log("📷 摄像头已打开")
         return True, "摄像头已打开"
+
+    def start_client_camera(self):
+        if cv2 is None or np is None:
+            self.camera_error = "服务器未安装 OpenCV，无法识别人脸"
+            add_log("⚠️ 服务器未安装 OpenCV，无法识别人脸")
+            return False, self.camera_error
+        with self.camera_lock:
+            if self.camera is not None:
+                self.camera.release()
+                self.camera = None
+            self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            self.camera_running = True
+            self.camera_source = "browser"
+            self.camera_error = ""
+            self.latest_frame = None
+            self.latest_face_feature = None
+            self.current_face_count = 0
+            self.known_face_count = 0
+            self.unknown_face_count = 0
+            self.detected_faces = []
+            self.last_face_event = "浏览器摄像头已连接，等待画面"
+        add_log("📷 浏览器端摄像头已连接")
+        return True, "浏览器摄像头已连接"
 
     def stop_camera(self):
         self.camera_running = False
@@ -473,6 +670,7 @@ class LabSafetyService:
             if self.camera is not None:
                 self.camera.release()
                 self.camera = None
+            self.camera_source = "none"
             self.latest_frame = None
             self.latest_face_feature = None
             self.current_face_count = 0
@@ -482,6 +680,26 @@ class LabSafetyService:
             self.last_face_event = "摄像头已关闭"
         add_log("📷 摄像头已关闭")
         return True, "摄像头已关闭"
+
+    def process_client_frame(self, frame_bytes):
+        if cv2 is None or np is None:
+            return False, "服务器未安装 OpenCV", None
+        if not self.camera_running or self.camera_source != "browser":
+            ok, message = self.start_client_camera()
+            if not ok:
+                return False, message, None
+        image_array = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        if frame is None:
+            return False, "浏览器画面解码失败", None
+        processed = self.process_face_frame(frame)
+        with self.camera_lock:
+            self.latest_frame = processed
+        ok, buffer = cv2.imencode(".jpg", processed)
+        if not ok:
+            return False, "识别画面编码失败", None
+        image_data = base64.b64encode(buffer.tobytes()).decode("ascii")
+        return True, "ok", f"data:image/jpeg;base64,{image_data}"
 
     def camera_loop(self):
         while self.camera_running:
@@ -715,6 +933,8 @@ class LabSafetyService:
             data = dict(monitor_data)
             data["alert_history"] = list(monitor_data["alert_history"])
             data["action_history"] = list(monitor_data["action_history"])
+            data["sensor_history_count"] = len(sensor_history)
+            data["latest_sensor_history"] = list(sensor_history[:20])
         runtime = datetime.now() - self.start_time
         data["runtime"] = {
             "hours": int(runtime.total_seconds() // 3600),
@@ -726,10 +946,24 @@ class LabSafetyService:
         data["thresholds"] = dict(self.thresholds)
         data["settings"] = dict(self.settings)
         data["sensor_rows"] = self.sensor_rows()
+        data["server_time"] = current_time_text()
+        data["last_state_saved"] = datetime.fromtimestamp(last_state_save).strftime("%Y-%m-%d %H:%M:%S") if last_state_save else "--"
         return data
 
 
 service = LabSafetyService()
+
+
+def flush_app_state_on_exit():
+    if not service_started:
+        return
+    try:
+        save_app_state(force=True)
+    except Exception:
+        pass
+
+
+atexit.register(flush_app_state_on_exit)
 
 
 def login_required(handler):
@@ -766,7 +1000,7 @@ def api_login():
         session["role"] = user_database[username].get("role", "实验人员")
         add_log(f"🔐 用户登录: {username}")
         if service.settings["auto_start_camera"]:
-            service.start_camera()
+            add_log("ℹ️ Web 版自动开摄像头需由浏览器授权，登录后请点击打开摄像头")
         return jsonify({"success": True, "redirect": url_for("dashboard")})
     return jsonify({"success": False, "message": "用户名或密码错误"})
 
@@ -906,11 +1140,35 @@ def api_camera_start():
     return jsonify({"success": success, "message": message})
 
 
+@web_app.route("/api/client-camera/start", methods=["POST"])
+@login_required
+def api_client_camera_start():
+    success, message = service.start_client_camera()
+    return jsonify({"success": success, "message": message})
+
+
 @web_app.route("/api/camera/stop", methods=["POST"])
 @login_required
 def api_camera_stop():
     success, message = service.stop_camera()
     return jsonify({"success": success, "message": message})
+
+
+@web_app.route("/api/client-frame", methods=["POST"])
+@login_required
+def api_client_frame():
+    frame_file = request.files.get("frame")
+    if frame_file is None:
+        return jsonify({"success": False, "message": "未收到摄像头画面"}), 400
+    success, message, image = service.process_client_frame(frame_file.read())
+    payload = {"success": success, "message": message}
+    if image:
+        payload["image"] = image
+        payload["faces"] = service.detected_faces
+        payload["current_faces"] = service.current_face_count
+        payload["known_face_count"] = service.known_face_count
+        payload["unknown_face_count"] = service.unknown_face_count
+    return jsonify(payload)
 
 
 @web_app.route("/video_feed")

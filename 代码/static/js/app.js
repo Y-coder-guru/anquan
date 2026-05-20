@@ -1,5 +1,8 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+let browserCameraStream = null;
+let browserCameraTimer = null;
+let sendingFrame = false;
 
 async function requestJSON(url, options = {}) {
     const response = await fetch(url, {
@@ -20,6 +23,121 @@ function toast(message) {
     node.classList.add("show");
     clearTimeout(window.__toastTimer);
     window.__toastTimer = setTimeout(() => node.classList.remove("show"), 2200);
+}
+
+function formatDateTime(value) {
+    const source = value ? new Date(String(value).replace(" ", "T")) : new Date();
+    const date = Number.isNaN(source.getTime()) ? new Date() : source;
+    return date.toLocaleString("zh-CN", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+    }).replace(/\//g, "-");
+}
+
+function updateTopClock(serverTime) {
+    const node = $("#refreshTime");
+    if (!node) return;
+    node.textContent = formatDateTime(serverTime);
+}
+
+function isSecureCameraContext() {
+    return window.isSecureContext || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+async function startBrowserCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        toast("当前浏览器不支持摄像头 API");
+        return;
+    }
+    if (!isSecureCameraContext()) {
+        toast("浏览器摄像头需要 HTTPS，或在本机 localhost 访问");
+        return;
+    }
+
+    const result = await requestJSON("/api/client-camera/start", { method: "POST", body: "{}" });
+    if (!result?.success) {
+        toast(result?.message || "服务器端识别服务启动失败");
+        return;
+    }
+
+    try {
+        browserCameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "user",
+                width: { ideal: 640 },
+                height: { ideal: 480 }
+            },
+            audio: false
+        });
+        const video = $("#localCameraVideo");
+        video.srcObject = browserCameraStream;
+        await video.play();
+        $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;
+        clearInterval(browserCameraTimer);
+        browserCameraTimer = setInterval(sendBrowserFrame, 260);
+        toast("浏览器摄像头已打开");
+    } catch (error) {
+        await requestJSON("/api/camera/stop", { method: "POST", body: "{}" });
+        toast(`摄像头权限被拒绝或不可用：${error.message}`);
+    }
+}
+
+function stopBrowserCamera() {
+    clearInterval(browserCameraTimer);
+    browserCameraTimer = null;
+    sendingFrame = false;
+    if (browserCameraStream) {
+        browserCameraStream.getTracks().forEach((track) => track.stop());
+        browserCameraStream = null;
+    }
+    const video = $("#localCameraVideo");
+    if (video) video.srcObject = null;
+    const streamImage = $("#cameraStream");
+    if (streamImage) streamImage.src = `/camera_offline.svg?t=${Date.now()}`;
+}
+
+async function sendBrowserFrame() {
+    if (sendingFrame || !browserCameraStream) return;
+    const video = $("#localCameraVideo");
+    const canvas = $("#clientFrameCanvas");
+    if (!video || !canvas || video.readyState < 2) return;
+
+    sendingFrame = true;
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, width, height);
+
+    canvas.toBlob(async (blob) => {
+        if (!blob) {
+            sendingFrame = false;
+            return;
+        }
+        const formData = new FormData();
+        formData.append("frame", blob, "frame.jpg");
+        try {
+            const response = await fetch("/api/client-frame", { method: "POST", body: formData });
+            if (response.status === 401) {
+                window.location.href = "/";
+                return;
+            }
+            const result = await response.json();
+            if (result.success && result.image) {
+                $("#cameraStream").src = result.image;
+            }
+        } catch (error) {
+            console.warn("client frame failed", error);
+        } finally {
+            sendingFrame = false;
+        }
+    }, "image/jpeg", 0.72);
 }
 
 function esc(value) {
@@ -274,7 +392,7 @@ async function updateDashboard() {
     const data = await requestJSON("/api/data");
     if (!data) return;
 
-    $("#refreshTime").textContent = new Date().toLocaleTimeString();
+    updateTopClock(data.server_time);
     $("#roomTemp").textContent = data.room_temp.toFixed(1);
     $("#humidity").textContent = Math.round(data.humidity);
     $("#smoke").textContent = Math.round(data.smoke);
@@ -311,7 +429,7 @@ async function updateDashboard() {
     cameraStatusPill.classList.toggle("offline", !data.camera_running);
     cameraStatusPill.classList.toggle("alert", Boolean(data.unknown_face_count));
     $("#cameraState").textContent = data.camera_running
-        ? `运行中 · 当前检测 ${data.current_faces} · 陌生人 ${data.unknown_face_count}`
+        ? `${data.camera_source === "browser" ? "浏览器摄像头" : "服务器摄像头"} · 当前检测 ${data.current_faces} · 陌生人 ${data.unknown_face_count}`
         : (data.camera_error || "未启动");
     $("#startCameraBtn").disabled = data.camera_running;
     $("#stopCameraBtn").disabled = !data.camera_running;
@@ -342,6 +460,8 @@ async function updateDashboard() {
     $("#statKnownFaces") && ($("#statKnownFaces").textContent = data.known_face_count);
     $("#statUnknownFaces") && ($("#statUnknownFaces").textContent = data.unknown_face_count);
     $("#statStrangerAlerts") && ($("#statStrangerAlerts").textContent = data.stranger_alarm_count);
+    $("#statHistory") && ($("#statHistory").textContent = data.sensor_history_count || 0);
+    $("#statSavedAt") && ($("#statSavedAt").textContent = data.last_state_saved && data.last_state_saved !== "--" ? data.last_state_saved.slice(5) : "--");
     $("#facePageMembers") && ($("#facePageMembers").textContent = data.members);
     $("#facePageCurrent") && ($("#facePageCurrent").textContent = data.current_faces);
     $("#facePageStrangers") && ($("#facePageStrangers").textContent = data.stranger_alarm_count);
@@ -418,7 +538,9 @@ function initDashboardActions() {
     loadUsers();
     loadSettings();
     updateDashboard();
+    updateTopClock();
     setInterval(updateDashboard, 1000);
+    setInterval(() => updateTopClock(), 1000);
 
     $("#logoutBtn").addEventListener("click", async () => {
         const result = await requestJSON("/api/logout", { method: "POST", body: "{}" });
@@ -426,12 +548,11 @@ function initDashboardActions() {
     });
 
     $("#startCameraBtn").addEventListener("click", async () => {
-        const result = await requestJSON("/api/camera/start", { method: "POST", body: "{}" });
-        toast(result.message);
-        if (result.success) $("#cameraStream").src = `/video_feed?t=${Date.now()}`;
+        await startBrowserCamera();
     });
 
     $("#stopCameraBtn").addEventListener("click", async () => {
+        stopBrowserCamera();
         const result = await requestJSON("/api/camera/stop", { method: "POST", body: "{}" });
         toast(result.message);
         if (result.success) $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;

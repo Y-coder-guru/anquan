@@ -322,6 +322,9 @@ select:focus {
     border: 1px solid var(--line);
     background: #101820;
     color: var(--muted);
+    min-width: 210px;
+    justify-content: center;
+    white-space: nowrap;
 }
 
 .live-dot {
