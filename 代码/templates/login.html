@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智巡卫士 - 登录</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body class="auth-body">
+<main class="auth-shell">
+    <section class="auth-panel">
+        <div class="brand-lockup">
+            <div class="brand-mark">盾</div>
+            <div>
+                <h1>智巡卫士</h1>
+                <p>实验室智能安全监控系统</p>
+            </div>
+        </div>
+
+        <div class="auth-tabs" role="tablist">
+            <button class="auth-tab active" data-auth-tab="login" type="button">登录</button>
+            <button class="auth-tab" data-auth-tab="register" type="button">注册</button>
+        </div>
+
+        <form class="auth-form active" id="loginForm">
+            <label>用户名
+                <input id="loginUsername" autocomplete="username" value="admin">
+            </label>
+            <label>密码
+                <input id="loginPassword" type="password" autocomplete="current-password" placeholder="admin123">
+            </label>
+            <button class="primary-btn" type="submit">进入系统</button>
+        </form>
+
+        <form class="auth-form" id="registerForm">
+            <label>用户名
+                <input id="registerUsername" autocomplete="username">
+            </label>
+            <label>密码
+                <input id="registerPassword" type="password" autocomplete="new-password">
+            </label>
+            <label>邮箱
+                <input id="registerEmail" type="email" autocomplete="email">
+            </label>
+            <button class="primary-btn" type="submit">创建账号</button>
+        </form>
+
+        <div class="auth-message" id="authMessage"></div>
+    </section>
+</main>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智巡卫士 - Web 控制台</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body class="app-body">
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-mark">盾</div>
+            <div>
+                <strong>智巡卫士</strong>
+                <span>Lab Safety Console</span>
+            </div>
+        </div>
+        <nav class="side-nav">
+            <button class="nav-item active" data-view="dashboard">主界面</button>
+            <button class="nav-item" data-view="stats">数据统计</button>
+            <button class="nav-item" data-view="faces">人脸数据库</button>
+            <button class="nav-item" data-view="logs">系统日志</button>
+            <button class="nav-item" data-view="users">用户管理</button>
+            <button class="nav-item" data-view="settings">系统设置</button>
+        </nav>
+        <div class="operator-card">
+            <span>当前用户</span>
+            <strong>{{ username }}</strong>
+            <small>{{ role }}</small>
+            <button class="ghost-btn full" id="logoutBtn" type="button">退出登录</button>
+        </div>
+    </aside>
+
+    <main class="workspace">
+        <header class="topbar">
+            <div>
+                <h1 id="pageTitle">主界面</h1>
+                <p id="pageSubtitle">实验室环境、风险联动与人脸门禁实时监控</p>
+            </div>
+            <div class="topbar-status">
+                <span class="live-dot"></span>
+                <span id="refreshTime">--:--:--</span>
+            </div>
+        </header>
+
+        <section class="view active" id="view-dashboard">
+            <div class="metric-grid">
+                <article class="metric-card">
+                    <span>室温</span><strong><b id="roomTemp">--</b> ℃</strong>
+                    <div class="meter"><i id="roomTempBar"></i></div>
+                </article>
+                <article class="metric-card">
+                    <span>湿度</span><strong><b id="humidity">--</b> %</strong>
+                    <div class="meter"><i id="humidityBar"></i></div>
+                </article>
+                <article class="metric-card">
+                    <span>烟雾</span><strong><b id="smoke">--</b> %</strong>
+                    <div class="meter"><i id="smokeBar"></i></div>
+                </article>
+                <article class="metric-card">
+                    <span>VOC</span><strong><b id="voc">--</b> ppb</strong>
+                    <div class="meter"><i id="vocBar"></i></div>
+                </article>
+            </div>
+
+            <div class="dashboard-layout">
+                <section class="panel wide-panel">
+                    <div class="panel-title">危险气体与反应釜</div>
+                    <div class="threshold-hint">
+                        <span>报警规则</span>
+                        <p>正常模拟数据会保持在安全范围内；只有达到阈值或点击模拟按钮才会触发报警。</p>
+                    </div>
+                    <div class="sensor-grid">
+                        <div class="sensor-row"><span>瓦斯 CH₄</span><strong id="gasCH4">-- ppm</strong><i><b id="gasCH4Bar"></b></i></div>
+                        <div class="sensor-row"><span>氢气 H₂</span><strong id="gasH2">-- ppm</strong><i><b id="gasH2Bar"></b></i></div>
+                        <div class="sensor-row"><span>一氧化碳 CO</span><strong id="gasCO">-- ppm</strong><i><b id="gasCOBar"></b></i></div>
+                        <div class="sensor-row"><span>硫化氢 H₂S</span><strong id="gasH2S">-- ppm</strong><i><b id="gasH2SBar"></b></i></div>
+                        <div class="sensor-row"><span>釜内温度</span><strong id="reactorTemp">-- ℃</strong><i><b id="reactorTempBar"></b></i></div>
+                        <div class="sensor-row"><span>釜内压力</span><strong id="reactorPressure">-- MPa</strong><i><b id="reactorPressureBar"></b></i></div>
+                    </div>
+                    <div class="threshold-list" id="thresholdList"></div>
+                </section>
+
+                <section class="risk-panel" id="riskPanel">
+                    <div class="risk-head">
+                        <span>当前风险状态</span>
+                        <em id="riskLevelBadge">0级</em>
+                    </div>
+                    <strong id="riskText">系统正常</strong>
+                    <p id="riskReason">所有参数正常</p>
+                    <div class="risk-accident" id="accidentType">当前事故：无</div>
+                    <div class="risk-accident" id="fireSuppression">灭火/抑制：待命</div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-title">报警处置流程</div>
+                    <div class="sequence-list" id="sequenceList"></div>
+                    <div class="panel-title sub-title">联动控制执行</div>
+                    <div class="action-list" id="actionList"></div>
+                    <div class="sim-row">
+                        <button class="danger-btn" data-sim="fire" type="button">室内火灾</button>
+                        <button class="warn-btn" data-sim="reactor" type="button">反应釜火灾</button>
+                        <button class="warn-btn" data-sim="gas" type="button">瓦斯泄漏</button>
+                        <button class="ok-btn" data-sim="reset" type="button">恢复正常</button>
+                    </div>
+                </section>
+
+                <section class="panel camera-panel">
+                    <div class="panel-title row-title">
+                        <span>人脸门禁监控</span>
+                        <span class="status-pill offline" id="cameraStatusPill">摄像头未启动</span>
+                    </div>
+                    <div class="video-box">
+                        <img id="cameraStream" alt="人脸监控视频流" src="{{ url_for('camera_offline') }}">
+                    </div>
+                    <div class="face-stat-grid">
+                        <article><span>当前人脸</span><strong id="faceCurrentCount">0</strong></article>
+                        <article><span>授权人员</span><strong id="knownFaceCount">0</strong></article>
+                        <article><span>陌生人</span><strong id="unknownFaceCount">0</strong></article>
+                        <article><span>陌生报警</span><strong id="strangerAlarmCount">0</strong></article>
+                    </div>
+                    <div class="camera-toolbar">
+                        <input id="memberNameInput" placeholder="人员姓名">
+                        <button class="primary-btn compact" id="addFaceBtn" type="button">录入当前人脸</button>
+                    </div>
+                    <div class="camera-toolbar">
+                        <button class="ghost-btn" id="startCameraBtn" type="button">打开摄像头</button>
+                        <button class="ghost-btn" id="stopCameraBtn" type="button">关闭摄像头</button>
+                        <span id="cameraState">未启动</span>
+                    </div>
+                    <div class="face-event" id="faceEvent">暂无人脸事件</div>
+                    <div class="face-detect-list" id="faceDetectList"></div>
+                    <div class="mini-member-panel">
+                        <div class="mini-title">已登记人员</div>
+                        <div id="miniMemberList" class="mini-member-list"></div>
+                    </div>
+                </section>
+
+                <section class="panel log-preview">
+                    <div class="panel-title row-title">
+                        <span>报警记录</span>
+                        <span class="status-pill" id="alertSummary">0 条</span>
+                    </div>
+                    <div class="alert-stat-line">
+                        <span>最近陌生人</span>
+                        <strong id="lastStrangerTime">--</strong>
+                    </div>
+                    <div class="compact-log" id="alertPreview"></div>
+                </section>
+            </div>
+        </section>
+
+        <section class="view" id="view-stats">
+            <div class="summary-grid">
+                <article><span>人脸库人数</span><strong id="statMembers">--</strong></article>
+                <article><span>当前检测人脸</span><strong id="statFaces">--</strong></article>
+                <article><span>报警记录</span><strong id="statAlerts">--</strong></article>
+                <article><span>系统日志</span><strong id="statLogs">--</strong></article>
+                <article><span>注册用户</span><strong id="statUsers">--</strong></article>
+                <article><span>运行时长</span><strong id="statRuntime">--</strong></article>
+                <article><span>授权人脸</span><strong id="statKnownFaces">--</strong></article>
+                <article><span>陌生人脸</span><strong id="statUnknownFaces">--</strong></article>
+                <article><span>陌生报警累计</span><strong id="statStrangerAlerts">--</strong></article>
+            </div>
+            <section class="panel radar-panel">
+                <div class="panel-title row-title">
+                    <span>监测状态雷达图</span>
+                    <div class="export-row">
+                        <button class="ghost-btn compact" data-export="xlsx" type="button">导出 Excel</button>
+                        <button class="ghost-btn compact" data-export="csv" type="button">导出 CSV</button>
+                        <button class="ghost-btn compact" data-export="json" type="button">导出 JSON</button>
+                    </div>
+                </div>
+                <canvas id="radarChart" width="760" height="360"></canvas>
+            </section>
+            <section class="panel">
+                <div class="panel-title">传感器实时快照</div>
+                <table class="data-table" id="sensorTable"></table>
+            </section>
+        </section>
+
+        <section class="view" id="view-faces">
+            <div class="summary-grid face-page-summary">
+                <article><span>登记人员</span><strong id="facePageMembers">--</strong></article>
+                <article><span>人脸样本</span><strong id="facePageSamples">--</strong></article>
+                <article><span>当前检测</span><strong id="facePageCurrent">--</strong></article>
+                <article><span>陌生报警累计</span><strong id="facePageStrangers">--</strong></article>
+            </div>
+            <section class="panel">
+                <div class="panel-title row-title">
+                    <span>人脸数据库</span>
+                    <span class="status-pill">录入会使用当前摄像头画面第一张人脸</span>
+                </div>
+                <div class="inline-form">
+                    <input id="facePageNameInput" placeholder="输入姓名后补录当前人脸">
+                    <button class="primary-btn compact" id="facePageAddBtn" type="button">新增/补录人脸</button>
+                </div>
+                <table class="data-table" id="faceTable"></table>
+            </section>
+        </section>
+
+        <section class="view" id="view-logs">
+            <section class="panel">
+                <div class="panel-title row-title">
+                    <span>系统日志</span>
+                    <button class="ghost-btn compact" id="clearLogsBtn" type="button">清空日志</button>
+                </div>
+                <div class="log-list" id="systemLogList"></div>
+            </section>
+        </section>
+
+        <section class="view" id="view-users">
+            <section class="panel">
+                <div class="panel-title">用户管理</div>
+                <form id="userForm" class="inline-form user-form">
+                    <input name="username" placeholder="用户名">
+                    <input name="display_name" placeholder="姓名/昵称">
+                    <select name="role">
+                        <option value="实验人员">非管理员</option>
+                        <option value="实验室管理员">管理员</option>
+                    </select>
+                    <input name="email" placeholder="邮箱">
+                    <input name="department" placeholder="部门">
+                    <input name="phone" placeholder="手机号">
+                    <input name="password" type="password" placeholder="新密码/新增密码">
+                    <button class="primary-btn compact" type="submit">新增/保存用户</button>
+                </form>
+                <table class="data-table" id="userTable"></table>
+            </section>
+        </section>
+
+        <section class="view" id="view-settings">
+            <section class="panel settings-panel">
+                <div class="panel-title">系统设置</div>
+                <form id="settingsForm" class="settings-form">
+                    <label>系统名称<input name="system_name"></label>
+                    <label>实验室位置<input name="lab_location"></label>
+                    <label>摄像头编号<input name="camera_index" type="number" min="0"></label>
+                    <label>人脸识别阈值<input name="tolerance" type="number" min="1" step="0.1"></label>
+                    <label>陌生人报警间隔(秒)<input name="alarm_interval" type="number" min="1"></label>
+                    <label>人脸样本保留数<input name="face_sample_limit" type="number" min="1"></label>
+                    <label>页面刷新间隔(秒)<input name="refresh_interval" type="number" min="1"></label>
+                    <label>日志保留条数<input name="log_limit" type="number" min="20"></label>
+                    <label>室温预警阈值(℃)<input name="room_temp_warn" type="number" step="0.1"></label>
+                    <label>烟雾报警阈值(%)<input name="smoke_alarm" type="number" step="0.1"></label>
+                    <label>VOC预警阈值(ppb)<input name="voc_warn" type="number" step="0.1"></label>
+                    <label>瓦斯预警阈值(ppm)<input name="gas_ch4_warn" type="number" step="1"></label>
+                    <label>瓦斯爆炸风险阈值(ppm)<input name="gas_ch4_explosion" type="number" step="1"></label>
+                    <label>CO报警阈值(ppm)<input name="gas_co_alarm" type="number" step="0.1"></label>
+                    <label>H₂S报警阈值(ppm)<input name="gas_h2s_alarm" type="number" step="0.1"></label>
+                    <label>反应釜温度报警(℃)<input name="reactor_temp_alarm" type="number" step="0.1"></label>
+                    <label>反应釜压力报警(MPa)<input name="reactor_pressure_alarm" type="number" step="0.01"></label>
+                    <label>一级推送 Bark Key<input name="bark_key"></label>
+                    <label class="check-row"><input name="push_enabled" type="checkbox"> 启用手机推送</label>
+                    <label class="check-row"><input name="auto_start_camera" type="checkbox"> 登录后自动打开摄像头</label>
+                    <label class="check-row"><input name="save_intruder_snapshot" type="checkbox"> 保存陌生人抓拍</label>
+                    <button class="primary-btn" type="submit">保存设置</button>
+                </form>
+            </section>
+        </section>
+    </main>
+</div>
+<div class="toast" id="toast"></div>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
