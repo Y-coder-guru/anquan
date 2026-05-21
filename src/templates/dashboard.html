@@ -10,16 +10,18 @@
 <div class="app-shell">
     <aside class="sidebar">
         <div class="sidebar-brand">
-            <div class="brand-mark">盾</div>
             <div>
                 <strong>智巡卫士</strong>
                 <span>Lab Safety Console</span>
             </div>
         </div>
         <nav class="side-nav">
-            <button class="nav-item active" data-view="dashboard">主界面</button>
+            <button class="nav-item active" data-view="dashboard">实时监测</button>
+            <button class="nav-item" data-view="monitor">实时监控</button>
+            <button class="nav-item" data-view="devices">设备管理</button>
             <button class="nav-item" data-view="stats">数据统计</button>
-            <button class="nav-item" data-view="faces">人脸数据库</button>
+            <button class="nav-item" data-view="trends">数据趋势</button>
+            <button class="nav-item" data-view="faces">人脸识别</button>
             <button class="nav-item" data-view="logs">系统日志</button>
             <button class="nav-item" data-view="users">用户管理</button>
             <button class="nav-item" data-view="settings">系统设置</button>
@@ -35,8 +37,8 @@
     <main class="workspace">
         <header class="topbar">
             <div>
-                <h1 id="pageTitle">主界面</h1>
-                <p id="pageSubtitle">实验室环境、风险联动与人脸门禁实时监控</p>
+                <h1 id="pageTitle">实时监测</h1>
+                <p id="pageSubtitle">环境参数、设备状态、风险状态与安全警告参数</p>
             </div>
             <div class="topbar-status">
                 <span class="live-dot"></span>
@@ -46,19 +48,19 @@
 
         <section class="view active" id="view-dashboard">
             <div class="metric-grid">
-                <article class="metric-card">
+                <article class="metric-card" data-sensor="room_temp">
                     <span>室温</span><strong><b id="roomTemp">--</b> ℃</strong>
                     <div class="meter"><i id="roomTempBar"></i></div>
                 </article>
-                <article class="metric-card">
+                <article class="metric-card" data-sensor="humidity">
                     <span>湿度</span><strong><b id="humidity">--</b> %</strong>
                     <div class="meter"><i id="humidityBar"></i></div>
                 </article>
-                <article class="metric-card">
+                <article class="metric-card" data-sensor="smoke">
                     <span>烟雾</span><strong><b id="smoke">--</b> %</strong>
                     <div class="meter"><i id="smokeBar"></i></div>
                 </article>
-                <article class="metric-card">
+                <article class="metric-card" data-sensor="voc">
                     <span>VOC</span><strong><b id="voc">--</b> ppb</strong>
                     <div class="meter"><i id="vocBar"></i></div>
                 </article>
@@ -66,23 +68,23 @@
 
             <div class="dashboard-layout">
                 <section class="panel wide-panel">
-                    <div class="panel-title">危险气体与反应釜</div>
+                    <div class="panel-title">环境参数与安全警告参数</div>
                     <div class="threshold-hint">
                         <span>报警规则</span>
                         <p>正常模拟数据会保持在安全范围内；只有达到阈值或点击模拟按钮才会触发报警。</p>
                     </div>
                     <div class="sensor-grid">
-                        <div class="sensor-row"><span>瓦斯 CH₄</span><strong id="gasCH4">-- ppm</strong><i><b id="gasCH4Bar"></b></i></div>
-                        <div class="sensor-row"><span>氢气 H₂</span><strong id="gasH2">-- ppm</strong><i><b id="gasH2Bar"></b></i></div>
-                        <div class="sensor-row"><span>一氧化碳 CO</span><strong id="gasCO">-- ppm</strong><i><b id="gasCOBar"></b></i></div>
-                        <div class="sensor-row"><span>硫化氢 H₂S</span><strong id="gasH2S">-- ppm</strong><i><b id="gasH2SBar"></b></i></div>
-                        <div class="sensor-row"><span>釜内温度</span><strong id="reactorTemp">-- ℃</strong><i><b id="reactorTempBar"></b></i></div>
-                        <div class="sensor-row"><span>釜内压力</span><strong id="reactorPressure">-- MPa</strong><i><b id="reactorPressureBar"></b></i></div>
+                        <div class="sensor-row" data-sensor="gas_ch4"><span>瓦斯 CH₄</span><strong id="gasCH4">-- ppm</strong><i><b id="gasCH4Bar"></b></i></div>
+                        <div class="sensor-row" data-sensor="gas_h2"><span>氢气 H₂</span><strong id="gasH2">-- ppm</strong><i><b id="gasH2Bar"></b></i></div>
+                        <div class="sensor-row" data-sensor="gas_co"><span>一氧化碳 CO</span><strong id="gasCO">-- ppm</strong><i><b id="gasCOBar"></b></i></div>
+                        <div class="sensor-row" data-sensor="gas_h2s"><span>硫化氢 H₂S</span><strong id="gasH2S">-- ppm</strong><i><b id="gasH2SBar"></b></i></div>
+                        <div class="sensor-row" data-sensor="reactor_temp"><span>釜内温度</span><strong id="reactorTemp">-- ℃</strong><i><b id="reactorTempBar"></b></i></div>
+                        <div class="sensor-row" data-sensor="reactor_pressure"><span>釜内压力</span><strong id="reactorPressure">-- MPa</strong><i><b id="reactorPressureBar"></b></i></div>
                     </div>
                     <div class="threshold-list" id="thresholdList"></div>
                 </section>
 
-                <section class="risk-panel" id="riskPanel">
+                <section class="risk-panel level-0" id="riskPanel">
                     <div class="risk-head">
                         <span>当前风险状态</span>
                         <em id="riskLevelBadge">0级</em>
@@ -91,6 +93,16 @@
                     <p id="riskReason">所有参数正常</p>
                     <div class="risk-accident" id="accidentType">当前事故：无</div>
                     <div class="risk-accident" id="fireSuppression">灭火/抑制：待命</div>
+                </section>
+
+                <section class="panel device-panel">
+                    <div class="panel-title">设备状态</div>
+                    <div class="device-status-grid" id="deviceStatusList">
+                        <article class="device-state standby"><span>通风系统</span><strong>待命</strong></article>
+                        <article class="device-state standby"><span>灭火抑制</span><strong>待命</strong></article>
+                        <article class="device-state standby"><span>门禁联动</span><strong>正常</strong></article>
+                        <article class="device-state standby"><span>手机推送</span><strong>待命</strong></article>
+                    </div>
                 </section>
 
                 <section class="panel">
@@ -106,9 +118,25 @@
                     </div>
                 </section>
 
-                <section class="panel camera-panel">
+                <section class="panel log-preview">
                     <div class="panel-title row-title">
-                        <span>人脸门禁监控</span>
+                        <span>安全警告记录</span>
+                        <span class="status-pill" id="alertSummary">0 条</span>
+                    </div>
+                    <div class="alert-stat-line">
+                        <span>最近陌生人</span>
+                        <strong id="lastStrangerTime">--</strong>
+                    </div>
+                    <div class="compact-log" id="alertPreview"></div>
+                </section>
+            </div>
+        </section>
+
+        <section class="view" id="view-monitor">
+            <div class="monitor-layout">
+                <section class="panel camera-panel monitor-camera-panel">
+                    <div class="panel-title row-title">
+                        <span>实时视频监控</span>
                         <span class="status-pill offline" id="cameraStatusPill">摄像头未启动</span>
                     </div>
                     <div class="video-box">
@@ -117,6 +145,18 @@
                         <canvas id="faceOverlayCanvas" hidden></canvas>
                         <canvas id="clientFrameCanvas" width="640" height="480" hidden></canvas>
                     </div>
+                    <div class="camera-toolbar">
+                        <button class="ghost-btn" id="startCameraBtn" type="button">打开摄像头</button>
+                        <button class="ghost-btn" id="stopCameraBtn" type="button">关闭摄像头</button>
+                        <span id="cameraState">未启动</span>
+                    </div>
+                    <div class="camera-hint" id="cameraHint">
+                        远程电脑打开摄像头需要 HTTPS；如果在本机测试，请使用 localhost 或 127.0.0.1。
+                    </div>
+                </section>
+
+                <section class="panel monitor-side-panel">
+                    <div class="panel-title">人脸识别状态</div>
                     <div class="face-stat-grid">
                         <article><span>当前人脸</span><strong id="faceCurrentCount">0</strong></article>
                         <article><span>授权人员</span><strong id="knownFaceCount">0</strong></article>
@@ -127,14 +167,6 @@
                         <input id="memberNameInput" placeholder="人员姓名">
                         <button class="primary-btn compact" id="addFaceBtn" type="button">录入当前人脸</button>
                     </div>
-                    <div class="camera-toolbar">
-                        <button class="ghost-btn" id="startCameraBtn" type="button">打开摄像头</button>
-                        <button class="ghost-btn" id="stopCameraBtn" type="button">关闭摄像头</button>
-                        <span id="cameraState">未启动</span>
-                    </div>
-                    <div class="camera-hint" id="cameraHint">
-                        远程电脑打开摄像头需要 HTTPS；如果在本机测试，请使用 localhost 或 127.0.0.1。
-                    </div>
                     <div class="face-event" id="faceEvent">暂无人脸事件</div>
                     <div class="face-detect-list" id="faceDetectList"></div>
                     <div class="mini-member-panel">
@@ -142,19 +174,23 @@
                         <div id="miniMemberList" class="mini-member-list"></div>
                     </div>
                 </section>
-
-                <section class="panel log-preview">
-                    <div class="panel-title row-title">
-                        <span>报警记录</span>
-                        <span class="status-pill" id="alertSummary">0 条</span>
-                    </div>
-                    <div class="alert-stat-line">
-                        <span>最近陌生人</span>
-                        <strong id="lastStrangerTime">--</strong>
-                    </div>
-                    <div class="compact-log" id="alertPreview"></div>
-                </section>
             </div>
+        </section>
+
+        <section class="view" id="view-devices">
+            <div class="summary-grid">
+                <article><span>设备总数</span><strong id="deviceTotal">--</strong></article>
+                <article><span>在线设备</span><strong id="deviceOnline">--</strong></article>
+                <article><span>联动运行</span><strong id="deviceActive">--</strong></article>
+                <article><span>需处理</span><strong id="deviceIssue">--</strong></article>
+            </div>
+            <section class="panel">
+                <div class="panel-title row-title">
+                    <span>设备管理</span>
+                    <button class="ghost-btn compact" id="refreshDeviceBtn" type="button">刷新状态</button>
+                </div>
+                <table class="data-table" id="deviceTable"></table>
+            </section>
         </section>
 
         <section class="view" id="view-stats">
@@ -180,11 +216,44 @@
                         <button class="ghost-btn compact" data-export="json" type="button">导出 JSON</button>
                     </div>
                 </div>
-                <canvas id="radarChart" width="760" height="360"></canvas>
+                <canvas id="radarChart" width="920" height="460"></canvas>
             </section>
             <section class="panel">
                 <div class="panel-title">传感器实时快照</div>
                 <table class="data-table" id="sensorTable"></table>
+            </section>
+        </section>
+
+        <section class="view" id="view-trends">
+            <section class="panel trend-panel">
+                <div class="panel-title row-title">
+                    <span>数据趋势变化</span>
+                    <select id="trendSensorSelect">
+                        <option value="room_temp">室温</option>
+                        <option value="humidity">湿度</option>
+                        <option value="smoke">烟雾</option>
+                        <option value="voc">VOC</option>
+                        <option value="gas_ch4">瓦斯 CH₄</option>
+                        <option value="gas_h2">氢气 H₂</option>
+                        <option value="gas_co">一氧化碳 CO</option>
+                        <option value="gas_h2s">硫化氢 H₂S</option>
+                        <option value="reactor_temp">釜内温度</option>
+                        <option value="reactor_pressure">釜内压力</option>
+                    </select>
+                </div>
+                <canvas id="trendChart" width="920" height="360"></canvas>
+            </section>
+            <section class="panel">
+                <div class="panel-title row-title">
+                    <span>周报与月报</span>
+                    <div class="export-row">
+                        <button class="ghost-btn compact" data-report-period="week" data-report-format="xlsx" type="button">导出周报 Excel</button>
+                        <button class="ghost-btn compact" data-report-period="month" data-report-format="xlsx" type="button">导出月报 Excel</button>
+                        <button class="ghost-btn compact" data-report-period="week" data-report-format="csv" type="button">周报 CSV</button>
+                        <button class="ghost-btn compact" data-report-period="month" data-report-format="csv" type="button">月报 CSV</button>
+                    </div>
+                </div>
+                <table class="data-table" id="trendTable"></table>
             </section>
         </section>
 
@@ -197,7 +266,7 @@
             </div>
             <section class="panel">
                 <div class="panel-title row-title">
-                    <span>人脸数据库</span>
+                    <span>人脸识别库</span>
                     <span class="status-pill">录入会使用当前摄像头画面第一张人脸</span>
                 </div>
                 <div class="inline-form">
@@ -245,7 +314,7 @@
                     <label>系统名称<input name="system_name"></label>
                     <label>实验室位置<input name="lab_location"></label>
                     <label>摄像头编号<input name="camera_index" type="number" min="0"></label>
-                    <label>人脸识别阈值<input name="tolerance" type="number" min="1" step="0.1"></label>
+                    <label>人脸匹配宽松度(1-100)<input name="tolerance" type="number" min="1" max="100" step="1"></label>
                     <label>陌生人报警间隔(秒)<input name="alarm_interval" type="number" min="1"></label>
                     <label>人脸样本保留数<input name="face_sample_limit" type="number" min="1"></label>
                     <label>页面刷新间隔(秒)<input name="refresh_interval" type="number" min="1"></label>
@@ -259,8 +328,9 @@
                     <label>H₂S报警阈值(ppm)<input name="gas_h2s_alarm" type="number" step="0.1"></label>
                     <label>反应釜温度报警(℃)<input name="reactor_temp_alarm" type="number" step="0.1"></label>
                     <label>反应釜压力报警(MPa)<input name="reactor_pressure_alarm" type="number" step="0.01"></label>
-                    <label>一级推送 Bark Key<input name="bark_key"></label>
-                    <label class="check-row"><input name="push_enabled" type="checkbox"> 启用手机推送</label>
+                    <label>iPhone Bark Key / URL<input name="bark_key" placeholder="Bark Key 或 https://api.day.app/你的Key"></label>
+                    <label class="check-row"><input name="push_enabled" type="checkbox"> 启用 Bark 手机推送</label>
+                    <button class="ghost-btn" id="testPushBtn" type="button">测试 Bark 推送</button>
                     <label class="check-row"><input name="auto_start_camera" type="checkbox"> 登录后自动打开摄像头</label>
                     <label class="check-row"><input name="save_intruder_snapshot" type="checkbox"> 保存陌生人抓拍</label>
                     <button class="primary-btn" type="submit">保存设置</button>

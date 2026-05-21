@@ -10,17 +10,12 @@
 <main class="auth-shell">
     <section class="auth-panel">
         <div class="brand-lockup">
-            <div class="brand-mark">盾</div>
             <div>
                 <h1>智巡卫士</h1>
                 <p>实验室智能安全监控系统</p>
             </div>
         </div>
-
-        <div class="auth-tabs" role="tablist">
-            <button class="auth-tab active" data-auth-tab="login" type="button">登录</button>
-            <button class="auth-tab" data-auth-tab="register" type="button">注册</button>
-        </div>
+        <div class="auth-divider" aria-hidden="true"></div>
 
         <form class="auth-form active" id="loginForm">
             <label>用户名
@@ -30,6 +25,14 @@
                 <input id="loginPassword" type="password" autocomplete="current-password">
             </label>
             <button class="primary-btn" type="submit">进入系统</button>
+            <div class="auth-login-options">
+                <label class="auth-switch">
+                    <input id="rememberLogin" class="auth-switch-input" type="checkbox">
+                    <span class="auth-switch-track" aria-hidden="true"></span>
+                    <span>记住密码</span>
+                </label>
+                <button class="auth-link" id="forgotPasswordBtn" type="button">忘记密码？</button>
+            </div>
         </form>
 
         <form class="auth-form" id="registerForm">
@@ -44,6 +47,11 @@
             </label>
             <button class="primary-btn" type="submit">创建账号</button>
         </form>
+
+        <div class="auth-tabs auth-tabs-bottom" role="tablist">
+            <button class="auth-tab active" data-auth-tab="login" type="button">登录</button>
+            <button class="auth-tab" data-auth-tab="register" type="button">注册</button>
+        </div>
 
         <div class="auth-message" id="authMessage"></div>
     </section>

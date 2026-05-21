@@ -12,12 +12,13 @@ import json
 import os
 import pickle
 import random
+import re
 import sys
 import threading
 import time
 import traceback
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 import base64
 import atexit
 
@@ -39,6 +40,10 @@ APP_STATE_FILE = os.path.join(BASE_DIR, "app_state.json")
 SNAPSHOT_DIR = os.path.join(BASE_DIR, "static", "snapshots")
 
 TOLERANCE = 60
+FACE_FEATURE_SIZE = (64, 64)
+FACE_FEATURE_LENGTH = 32 * 32 + 256 + 16
+FACE_MATCH_THRESHOLD = 0.32
+FACE_AMBIGUITY_MARGIN = 0.06
 ALARM_INTERVAL = 30
 LOG_LIMIT = 300
 CAMERA_INDEX = 0
@@ -46,7 +51,7 @@ PUSH_ENABLED = True
 STATE_SAVE_INTERVAL = 8
 SENSOR_HISTORY_INTERVAL = 30
 SENSOR_HISTORY_LIMIT = 720
-ASSET_VERSION = "20260521-login-bg"
+ASSET_VERSION = "20260521-auth-glass-tabs"
 
 web_app = Flask(__name__, template_folder="templates", static_folder="static")
 web_app.secret_key = "zhixunweishi_secret_key_2024"
@@ -87,6 +92,15 @@ SENSOR_DEFINITIONS = [
     ("gas_h2s", "硫化氢 H₂S", "ppm", 100, "gas_h2s_alarm"),
     ("reactor_temp", "反应釜温度", "℃", 120, "reactor_temp_alarm"),
     ("reactor_pressure", "反应釜压力", "MPa", 2, "reactor_pressure_alarm")
+]
+
+DEVICE_CATALOG = [
+    {"id": "sensor_hub", "name": "环境传感器组", "category": "采集设备", "location": "实验室"},
+    {"id": "ventilation", "name": "通风排风系统", "category": "联动设备", "location": "实验室顶部"},
+    {"id": "suppression", "name": "灭火抑制系统", "category": "联动设备", "location": "实验室"},
+    {"id": "access_control", "name": "门禁联动系统", "category": "安全设备", "location": "安全出口"},
+    {"id": "camera", "name": "实时监控摄像头", "category": "视频设备", "location": "监控位"},
+    {"id": "bark_push", "name": "Bark 手机推送", "category": "通知设备", "location": "iPhone"}
 ]
 
 BARK_KEYS = {
@@ -250,6 +264,17 @@ def current_time_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def parse_time(value):
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def re_search(pattern, text):
+    return re.search(pattern, str(text or "")) is not None
+
+
 def mark_state_dirty():
     global state_dirty
     state_dirty = True
@@ -381,30 +406,98 @@ def load_app_state(service_instance):
 
 
 def extract_face_feature(face_gray):
-    if cv2 is None:
+    if cv2 is None or np is None or face_gray is None or face_gray.size == 0:
         return None
-    resized = cv2.resize(face_gray, (100, 100))
-    hist = cv2.calcHist([resized], [0], None, [128], [0, 256])
-    cv2.normalize(hist, hist)
-    return hist.flatten()
+    resized = cv2.resize(cv2.equalizeHist(face_gray), FACE_FEATURE_SIZE)
+    normalized = resized.astype("float32") / 255.0
+    normalized = (normalized - float(normalized.mean())) / (float(normalized.std()) + 1e-6)
+    thumbnail = cv2.resize(normalized, (32, 32)).flatten().astype("float32")
+
+    center = resized[1:-1, 1:-1]
+    lbp = np.zeros_like(center, dtype=np.uint8)
+    lbp |= (resized[:-2, :-2] >= center).astype(np.uint8) << 7
+    lbp |= (resized[:-2, 1:-1] >= center).astype(np.uint8) << 6
+    lbp |= (resized[:-2, 2:] >= center).astype(np.uint8) << 5
+    lbp |= (resized[1:-1, 2:] >= center).astype(np.uint8) << 4
+    lbp |= (resized[2:, 2:] >= center).astype(np.uint8) << 3
+    lbp |= (resized[2:, 1:-1] >= center).astype(np.uint8) << 2
+    lbp |= (resized[2:, :-2] >= center).astype(np.uint8) << 1
+    lbp |= (resized[1:-1, :-2] >= center).astype(np.uint8)
+    texture_hist = cv2.calcHist([lbp], [0], None, [256], [0, 256]).flatten().astype("float32")
+    texture_hist /= float(texture_hist.sum()) + 1e-6
+
+    grad_x = cv2.Sobel(resized, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(resized, cv2.CV_32F, 0, 1, ksize=3)
+    magnitude, angle = cv2.cartToPolar(grad_x, grad_y, angleInDegrees=True)
+    bins = (angle / 22.5).astype("int32") % 16
+    edge_hist = np.zeros(16, dtype="float32")
+    for bucket in range(16):
+        edge_hist[bucket] = float(magnitude[bins == bucket].sum())
+    edge_hist /= float(edge_hist.sum()) + 1e-6
+
+    feature = np.concatenate([
+        thumbnail * 0.55,
+        texture_hist * 0.35,
+        edge_hist * 0.10
+    ]).astype("float32")
+    return normalize_face_feature(feature)
+
+
+def normalize_face_feature(feature):
+    if np is None or feature is None:
+        return None
+    arr = np.asarray(feature, dtype="float32").flatten()
+    if arr.size != FACE_FEATURE_LENGTH:
+        return None
+    norm = float(np.linalg.norm(arr))
+    if norm <= 1e-6:
+        return None
+    return arr / norm
 
 
 def compare_faces(feature1, feature2):
-    return cv2.norm(feature1, feature2, cv2.NORM_L2)
+    current = normalize_face_feature(feature1)
+    saved = normalize_face_feature(feature2)
+    if current is None or saved is None:
+        return None
+    return max(0.0, min(2.0, 1.0 - float(np.dot(current, saved))))
+
+
+def face_match_threshold():
+    try:
+        value = float(TOLERANCE)
+    except (TypeError, ValueError):
+        return FACE_MATCH_THRESHOLD
+    if 0 < value < 1:
+        return min(max(value, 0.20), 0.50)
+    if 1 <= value <= 100:
+        return min(max(0.20 + value * 0.002, 0.22), 0.42)
+    return FACE_MATCH_THRESHOLD
 
 
 def identify_face(face_feature):
     if cv2 is None or face_feature is None or not face_members:
         return None, 0
     best_name = None
-    best_score = TOLERANCE + 1
+    best_score = 999.0
+    second_score = 999.0
+    threshold = face_match_threshold()
     for name, features in face_members.items():
+        person_score = 999.0
         for saved in features:
             score = compare_faces(face_feature, saved)
-            if score < best_score:
-                best_score = score
-                best_name = name
-    if best_name and best_score <= TOLERANCE:
+            if score is None:
+                continue
+            if score < person_score:
+                person_score = score
+        if person_score < best_score:
+            second_score = best_score
+            best_score = person_score
+            best_name = name
+        elif person_score < second_score:
+            second_score = person_score
+    is_clear_match = second_score >= 999.0 or (second_score - best_score) >= FACE_AMBIGUITY_MARGIN
+    if best_name and best_score <= threshold and is_clear_match:
         return best_name, best_score
     return None, best_score
 
@@ -465,6 +558,7 @@ class LabSafetyService:
             "auto_start_camera": False,
             "save_intruder_snapshot": True,
             "face_sample_limit": 3,
+            "device_overrides": {},
             "system_name": "智巡卫士",
             "lab_location": "实验室",
             "refresh_interval": 1
@@ -594,27 +688,59 @@ class LabSafetyService:
         add_log(f"【{level_text}】{accident_name}")
         self.send_bark_push(level, level_text, accident_name)
 
-    def send_bark_push(self, level, title, message):
+    def send_bark_push(self, level, title, message, log_missing=False):
         if not self.settings["push_enabled"]:
-            return
+            if log_missing:
+                add_log("⚠️ Bark 推送未启用，陌生人报警已记录在系统")
+            return False
         config = PUSH_CONFIG.get(level, PUSH_CONFIG[1])
-        bark_key = config.get("key")
-        if not bark_key:
-            return
+        url = self.build_bark_url(title, message)
+        if not url:
+            if log_missing:
+                add_log("⚠️ Bark Key 未配置，陌生人报警已记录在系统")
+            return False
 
         def push_worker():
             try:
-                encoded_title = urllib.parse.quote(title)
-                encoded_message = urllib.parse.quote(
-                    f"{message}\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-                url = f"https://api.day.app/{bark_key}/{encoded_title}/{encoded_message}"
-                requests.get(url, timeout=3)
+                response = requests.get(url, timeout=5)
+                response.raise_for_status()
                 add_log(f"📱 推送({level}级): {', '.join(config['targets'])}")
             except Exception as exc:
                 add_log(f"⚠️ 推送失败: {str(exc)[:40]}")
 
         threading.Thread(target=push_worker, daemon=True).start()
+        return True
+
+    def build_bark_url(self, title, message, bark_key=None):
+        key_or_url = (bark_key if bark_key is not None else self.settings.get("bark_key", "")).strip()
+        if not key_or_url:
+            return None
+        base = key_or_url.rstrip("/")
+        if not base.startswith(("http://", "https://")):
+            base = f"https://api.day.app/{base}"
+        encoded_title = urllib.parse.quote(str(title))
+        encoded_message = urllib.parse.quote(
+            f"{message}\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        query = urllib.parse.urlencode({
+            "sound": "alarm",
+            "group": self.settings.get("system_name", "实验室安全")
+        })
+        return f"{base}/{encoded_title}/{encoded_message}?{query}"
+
+    def test_bark_push(self, bark_key=None, enabled=True):
+        if not enabled:
+            return False, "请先勾选启用 Bark 手机推送"
+        url = self.build_bark_url("智巡卫士测试推送", "Bark 推送配置成功", bark_key)
+        if not url:
+            return False, "请填写 Bark Key 或 Bark URL"
+        try:
+            response = requests.get(url, timeout=8)
+            response.raise_for_status()
+            add_log("📱 Bark 测试推送已发送")
+            return True, "测试推送已发送，请查看 iPhone Bark"
+        except Exception as exc:
+            return False, f"Bark 推送失败: {str(exc)[:80]}"
 
     def start_camera(self):
         if cv2 is None:
@@ -761,16 +887,20 @@ class LabSafetyService:
                 color = (0, 220, 70)
                 label = name
                 status = "已授权"
+                status_code = "known"
                 self.known_face_count += 1
             else:
                 color = (0, 0, 255)
                 label = "STRANGER"
                 status = "陌生人"
+                status_code = "unknown"
                 self.unknown_face_count += 1
                 self.handle_stranger_alarm(x, y, frame, (box_x, box_y, box_w, box_h))
             detected_faces.append({
                 "label": label,
                 "status": status,
+                "status_code": status_code,
+                "score": None if _score is None or _score >= 999 else round(float(_score), 4),
                 "box": [int(box_x), int(box_y), int(box_w), int(box_h)]
             })
             cv2.rectangle(frame, (box_x, box_y), (box_x + box_w, box_y + box_h), color, 2)
@@ -839,7 +969,7 @@ class LabSafetyService:
         self.last_stranger_time = entry["time"]
         self.last_face_event = "检测到陌生人并生成报警"
         add_log("🚨 人脸识别: 检测到陌生人")
-        self.send_bark_push(1, "👤 陌生人闯入", "实验室检测到陌生人")
+        self.send_bark_push(1, "👤 陌生人闯入", "实验室检测到陌生人", log_missing=True)
 
     def frame_generator(self):
         if cv2 is None:
@@ -870,11 +1000,13 @@ class LabSafetyService:
         if self.latest_face_feature is None:
             return False, "当前画面未检测到可录入的人脸"
         with data_lock:
-            face_members.setdefault(name, [])
-            face_members[name].append(self.latest_face_feature.copy())
+            current_samples = [
+                feature for feature in face_members.get(name, [])
+                if normalize_face_feature(feature) is not None
+            ]
+            current_samples.append(self.latest_face_feature.copy())
             sample_limit = int(self.settings.get("face_sample_limit", 3))
-            if len(face_members[name]) > sample_limit:
-                face_members[name] = face_members[name][-sample_limit:]
+            face_members[name] = current_samples[-sample_limit:]
             save_members()
         add_log(f"👤 人脸录入: {name}")
         return True, f"已录入 {name}"
@@ -899,7 +1031,7 @@ class LabSafetyService:
             refresh_interval = int(payload.get("refresh_interval", self.settings["refresh_interval"]))
         except ValueError:
             return False, "设置参数必须是数字"
-        if camera_index < 0 or tolerance <= 0 or alarm_interval < 1 or log_limit < 20 or face_sample_limit < 1 or refresh_interval < 1:
+        if camera_index < 0 or not 1 <= tolerance <= 100 or alarm_interval < 1 or log_limit < 20 or face_sample_limit < 1 or refresh_interval < 1:
             return False, "请检查参数范围"
 
         self.settings.update({
@@ -965,6 +1097,161 @@ class LabSafetyService:
         self.last_sensor_snapshot = rows
         return rows
 
+    def device_rows(self):
+        with data_lock:
+            actions = " ".join(monitor_data.get("actions", []))
+            level = int(monitor_data.get("risk_level", 0) or 0)
+            fire_suppression = monitor_data.get("fire_suppression")
+            camera_running = bool(monitor_data.get("camera_running"))
+            camera_source = monitor_data.get("camera_source", "none")
+        push_ready = bool(self.settings.get("push_enabled") and self.settings.get("bark_key"))
+        overrides = self.settings.get("device_overrides", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
+
+        dynamic = {
+            "sensor_hub": ("在线", "online", "每 30 秒记录历史快照"),
+            "ventilation": (
+                "已联动" if re_search("排风|通风", actions) else "待命",
+                "active" if re_search("排风|通风", actions) else "online",
+                "风险等级触发时自动排风"
+            ),
+            "suppression": (
+                "已启用" if fire_suppression or re_search("灭火|抑制|冷却", actions) else "待命",
+                "danger" if level >= 3 and (fire_suppression or re_search("灭火|抑制|冷却", actions)) else "online",
+                fire_suppression or "火灾/过压时自动联动"
+            ),
+            "access_control": (
+                "疏散联动" if re_search("门禁|安全门|疏散", actions) else "正常",
+                "warning" if re_search("门禁|安全门|疏散", actions) else "online",
+                "紧急时自动打开安全通道"
+            ),
+            "camera": (
+                "运行中" if camera_running else "未启动",
+                "active" if camera_running else "standby",
+                f"{'浏览器摄像头' if camera_source == 'browser' else '服务器摄像头'}" if camera_running else "等待开启"
+            ),
+            "bark_push": (
+                "已配置" if push_ready else "未配置",
+                "active" if push_ready else "warning",
+                "陌生人和安全报警会推送 iPhone" if push_ready else "请在系统设置填写 Bark Key"
+            )
+        }
+
+        devices = []
+        for item in DEVICE_CATALOG:
+            override = overrides.get(item["id"], {}) if isinstance(overrides.get(item["id"], {}), dict) else {}
+            enabled = bool(override.get("enabled", True))
+            maintenance = bool(override.get("maintenance", False))
+            status, status_code, note = dynamic[item["id"]]
+            if not enabled:
+                status, status_code, note = "停用", "offline", "设备已手动停用"
+            elif maintenance:
+                status, status_code, note = "维护中", "warning", "设备处于维护标记"
+            devices.append({
+                **item,
+                "enabled": enabled,
+                "maintenance": maintenance,
+                "status": status,
+                "status_code": status_code,
+                "note": note,
+                "updated_at": override.get("updated_at", "--")
+            })
+        return devices
+
+    def update_device(self, payload):
+        device_id = payload.get("id")
+        action = payload.get("action")
+        if device_id not in {item["id"] for item in DEVICE_CATALOG}:
+            return False, "设备不存在"
+        overrides = self.settings.setdefault("device_overrides", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
+            self.settings["device_overrides"] = overrides
+        current = overrides.setdefault(device_id, {})
+        if action == "toggle":
+            current["enabled"] = not bool(current.get("enabled", True))
+        elif action == "maintenance":
+            current["maintenance"] = not bool(current.get("maintenance", False))
+        elif action == "enable":
+            current["enabled"] = True
+            current["maintenance"] = False
+        else:
+            return False, "未知设备操作"
+        current["updated_at"] = current_time_text()
+        mark_state_dirty()
+        device_name = next(item["name"] for item in DEVICE_CATALOG if item["id"] == device_id)
+        add_log(f"🛠️ 设备管理: {device_name} {action}")
+        return True, "设备状态已更新"
+
+    def report_payload(self, period):
+        days = 7 if period == "week" else 30
+        label = "周报" if period == "week" else "月报"
+        cutoff = datetime.now() - timedelta(days=days)
+        with data_lock:
+            history = list(sensor_history)
+            alerts = list(monitor_data["alert_history"])
+        snapshots = []
+        for item in history:
+            item_time = parse_time(item.get("time"))
+            if item_time is None or item_time >= cutoff:
+                snapshots.append(item)
+        if not snapshots:
+            snapshots = [{
+                "time": current_time_text(),
+                "risk_level": monitor_data.get("risk_level", 0),
+                "accident_type": monitor_data.get("accident_type", "无"),
+                "rows": self.sensor_rows()
+            }]
+
+        summary = []
+        detail = []
+        for key, name, unit, _max_value, _threshold_key in SENSOR_DEFINITIONS:
+            values = []
+            exceed_count = 0
+            latest = None
+            for snapshot in snapshots:
+                for row in snapshot.get("rows", []):
+                    if row.get("key") != key:
+                        continue
+                    value = float(row.get("value", 0))
+                    values.append(value)
+                    if latest is None:
+                        latest = row
+                    if row.get("status") != "正常":
+                        exceed_count += 1
+                    detail.append({
+                        "时间": snapshot.get("time", "--"),
+                        "监测项": row.get("name", name),
+                        "数值": row.get("value", ""),
+                        "单位": row.get("unit", unit),
+                        "状态": row.get("status", "正常"),
+                        "风险等级": snapshot.get("risk_level", 0),
+                        "事故类型": snapshot.get("accident_type", "无")
+                    })
+            if values:
+                summary.append({
+                    "监测项": name,
+                    "单位": unit,
+                    "最新值": latest.get("value", "") if latest else "",
+                    "平均值": round(sum(values) / len(values), 2),
+                    "最高值": round(max(values), 2),
+                    "最低值": round(min(values), 2),
+                    "异常次数": exceed_count,
+                    "样本数": len(values)
+                })
+        alert_count = sum(1 for item in alerts if (parse_time(item.get("time")) or datetime.now()) >= cutoff)
+        return {
+            "period": period,
+            "label": label,
+            "days": days,
+            "generated_at": current_time_text(),
+            "summary": summary,
+            "detail": detail,
+            "alert_count": alert_count,
+            "snapshot_count": len(snapshots)
+        }
+
     def export_rows(self):
         snapshot = self.snapshot()
         return [
@@ -989,6 +1276,7 @@ class LabSafetyService:
             data["action_history"] = list(monitor_data["action_history"])
             data["sensor_history_count"] = len(sensor_history)
             data["latest_sensor_history"] = list(sensor_history[:20])
+            data["trend_history"] = list(sensor_history[:120])
         runtime = datetime.now() - self.start_time
         data["runtime"] = {
             "hours": int(runtime.total_seconds() // 3600),
@@ -1000,6 +1288,7 @@ class LabSafetyService:
         data["thresholds"] = dict(self.thresholds)
         data["settings"] = dict(self.settings)
         data["sensor_rows"] = self.sensor_rows()
+        data["devices"] = self.device_rows()
         data["server_time"] = current_time_text()
         data["last_state_saved"] = datetime.fromtimestamp(last_state_save).strftime("%Y-%m-%d %H:%M:%S") if last_state_save else "--"
         return data
@@ -1185,10 +1474,25 @@ def api_face_members():
         data = request.get_json() or {}
         success, message = service.delete_face_member(data.get("name", ""))
         return jsonify({"success": success, "message": message})
-    members = [
-        {"name": name, "samples": len(features), "status": "样本充足" if len(features) >= 3 else "可继续补录"}
-        for name, features in sorted(face_members.items())
-    ]
+    members = []
+    for name, features in sorted(face_members.items()):
+        valid_samples = sum(1 for feature in features if normalize_face_feature(feature) is not None)
+        legacy_samples = max(0, len(features) - valid_samples)
+        if valid_samples >= 3:
+            status = "样本充足"
+        elif valid_samples > 0:
+            status = "可继续补录"
+        else:
+            status = "旧样本需重新录入"
+        if legacy_samples:
+            status = f"{status} · {legacy_samples} 个旧样本已忽略"
+        members.append({
+            "name": name,
+            "samples": valid_samples,
+            "total_samples": len(features),
+            "legacy_samples": legacy_samples,
+            "status": status
+        })
     return jsonify({"success": True, "members": members})
 
 
@@ -1253,6 +1557,111 @@ def api_settings():
         success, message = service.apply_settings(request.get_json() or {})
         return jsonify({"success": success, "message": message, "settings": service.settings, "thresholds": service.thresholds})
     return jsonify({"success": True, "settings": service.settings, "thresholds": service.thresholds})
+
+
+@web_app.route("/api/push/test", methods=["POST"])
+@login_required
+def api_push_test():
+    payload = request.get_json() or {}
+    success, message = service.test_bark_push(
+        payload.get("bark_key", service.settings.get("bark_key", "")),
+        bool(payload.get("push_enabled", service.settings.get("push_enabled", False)))
+    )
+    return jsonify({"success": success, "message": message})
+
+
+@web_app.route("/api/devices", methods=["GET", "POST"])
+@login_required
+def api_devices():
+    if request.method == "POST":
+        success, message = service.update_device(request.get_json() or {})
+        return jsonify({"success": success, "message": message, "devices": service.device_rows()})
+    return jsonify({"success": True, "devices": service.device_rows()})
+
+
+@web_app.route("/api/report/<period>/<fmt>")
+@login_required
+def api_report(period, fmt):
+    if period not in {"week", "month"}:
+        return jsonify({"success": False, "message": "不支持的报表周期"}), 400
+    report = service.report_payload(period)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename_prefix = f"lab_safety_{period}_report_{timestamp}"
+    add_log(f"📄 导出{report['label']}: {fmt.upper()}")
+
+    if fmt == "json":
+        payload = json.dumps(report, ensure_ascii=False, indent=2)
+        return Response(
+            payload,
+            mimetype="application/json",
+            headers={"Content-Disposition": f"attachment; filename={filename_prefix}.json"}
+        )
+
+    if fmt == "csv":
+        buffer = io.StringIO()
+        buffer.write(f"{report['label']},生成时间,{report['generated_at']},历史快照,{report['snapshot_count']},报警数,{report['alert_count']}\n")
+        rows = report["summary"]
+        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+        return Response(
+            "\ufeff" + buffer.getvalue(),
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={filename_prefix}.csv"}
+        )
+
+    if fmt == "xlsx":
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+        except Exception:
+            return jsonify({"success": False, "message": "当前环境缺少 openpyxl，无法导出 Excel"}), 500
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = report["label"]
+        meta_rows = [
+            ["报表周期", report["label"]],
+            ["生成时间", report["generated_at"]],
+            ["历史快照", report["snapshot_count"]],
+            ["报警数量", report["alert_count"]]
+        ]
+        for row in meta_rows:
+            ws.append(row)
+        ws.append([])
+        headers = list(report["summary"][0].keys())
+        ws.append(headers)
+        header_row = ws.max_row
+        for cell in ws[header_row]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1F2937")
+        for row in report["summary"]:
+            ws.append([row[h] for h in headers])
+
+        detail_ws = wb.create_sheet("历史明细")
+        detail_headers = list(report["detail"][0].keys())
+        detail_ws.append(detail_headers)
+        for cell in detail_ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1F2937")
+        for row in report["detail"]:
+            detail_ws.append([row[h] for h in detail_headers])
+
+        for sheet in wb.worksheets:
+            for column_cells in sheet.columns:
+                width = max(len(str(cell.value or "")) for cell in column_cells) + 2
+                sheet.column_dimensions[column_cells[0].column_letter].width = min(max(width, 12), 30)
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"{filename_prefix}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    return jsonify({"success": False, "message": "不支持的报表格式"}), 400
 
 
 @web_app.route("/api/export/<fmt>")

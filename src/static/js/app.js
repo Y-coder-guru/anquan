@@ -197,7 +197,7 @@ function drawFaceOverlay(faces = [], sourceWidth = 1, sourceHeight = 1) {
         const box = face.box || [];
         if (box.length < 4) return;
         const [x, y, w, h] = box.map(Number);
-        const isStranger = face.label === "STRANGER" || String(face.status || "").includes("陌生");
+        const isStranger = face.status_code === "unknown" || face.label === "STRANGER" || String(face.status || "").includes("陌生");
         const color = isStranger ? "#ef5d5d" : "#22c77a";
         const left = offsetX + x * scaleX;
         const top = offsetY + y * scaleY;
@@ -384,6 +384,21 @@ function initAuth() {
     const loginForm = $("#loginForm");
     const registerForm = $("#registerForm");
     if (!loginForm || !registerForm) return;
+    const authMessage = $("#authMessage");
+    const rememberLogin = $("#rememberLogin");
+    const forgotPasswordBtn = $("#forgotPasswordBtn");
+    const savedLoginKey = "zhixun.rememberLogin";
+
+    try {
+        const savedLogin = JSON.parse(localStorage.getItem(savedLoginKey) || "null");
+        if (savedLogin && savedLogin.username && savedLogin.password) {
+            $("#loginUsername").value = savedLogin.username;
+            $("#loginPassword").value = savedLogin.password;
+            if (rememberLogin) rememberLogin.checked = true;
+        }
+    } catch (error) {
+        localStorage.removeItem(savedLoginKey);
+    }
 
     $$(".auth-tab").forEach((button) => {
         button.addEventListener("click", () => {
@@ -391,31 +406,46 @@ function initAuth() {
             $$(".auth-tab").forEach((item) => item.classList.toggle("active", item === button));
             loginForm.classList.toggle("active", mode === "login");
             registerForm.classList.toggle("active", mode === "register");
-            $("#authMessage").textContent = "";
-            $("#authMessage").classList.remove("success");
+            authMessage.textContent = "";
+            authMessage.classList.remove("success");
         });
     });
 
+    if (forgotPasswordBtn) {
+        forgotPasswordBtn.addEventListener("click", () => {
+            authMessage.textContent = "请联系实验室管理员重置密码";
+            authMessage.classList.remove("success");
+        });
+    }
+
     loginForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        const username = $("#loginUsername").value.trim();
+        const password = $("#loginPassword").value;
         const result = await requestJSON("/api/login", {
             method: "POST",
             body: JSON.stringify({
-                username: $("#loginUsername").value.trim(),
-                password: $("#loginPassword").value
+                username,
+                password
             })
         });
         if (!result) return;
         if (result.success) {
+            if (rememberLogin && rememberLogin.checked) {
+                localStorage.setItem(savedLoginKey, JSON.stringify({ username, password }));
+            } else {
+                localStorage.removeItem(savedLoginKey);
+            }
             window.location.href = result.redirect || "/dashboard";
         } else {
-            $("#authMessage").textContent = result.message;
+            authMessage.textContent = result.message;
+            authMessage.classList.remove("success");
         }
     });
 
     registerForm.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const message = $("#authMessage");
+        const message = authMessage;
         const result = await requestJSON("/api/register", {
             method: "POST",
             body: JSON.stringify({
@@ -437,9 +467,12 @@ function initAuth() {
 }
 
 const pageCopy = {
-    dashboard: ["主界面", "实验室环境、风险联动与人脸门禁实时监控"],
+    dashboard: ["实时监测", "环境参数、设备状态、风险状态与安全警告参数"],
+    monitor: ["实时监控", "摄像头画面、人员行为与陌生人报警"],
+    devices: ["设备管理", "联动设备、采集设备与通知通道状态"],
     stats: ["数据统计", "关键数据汇总与传感器实时快照"],
-    faces: ["人脸数据库", "实验室成员人脸样本管理"],
+    trends: ["数据趋势", "历史趋势变化、异常统计与周期报表导出"],
+    faces: ["人脸识别", "录入人脸样本与识别库管理"],
     logs: ["系统日志", "登录、摄像头、人脸录入、设置变更记录"],
     users: ["用户管理", "注册用户与系统角色管理"],
     settings: ["系统设置", "识别、报警、推送和日志保留策略"]
@@ -453,7 +486,9 @@ function initNavigation() {
             $$(".view").forEach((item) => item.classList.toggle("active", item.id === `view-${view}`));
             $("#pageTitle").textContent = pageCopy[view][0];
             $("#pageSubtitle").textContent = pageCopy[view][1];
-            if (view === "faces") loadFaceMembers();
+            if (view === "faces" || view === "monitor") loadFaceMembers();
+            if (view === "devices") loadDevices();
+            if (view === "trends") renderTrendView(window.__dashboardData || {});
             if (view === "logs") loadLogs();
             if (view === "users") loadUsers();
             if (view === "settings") loadSettings();
@@ -471,6 +506,66 @@ function setBar(id, value, max, color) {
     if (!node) return;
     node.style.width = width(value, max);
     if (color) node.style.background = color;
+}
+
+function sensorHistoryStats(data, key) {
+    const values = [];
+    (data.latest_sensor_history || []).forEach((snapshot) => {
+        (snapshot.rows || []).forEach((row) => {
+            if (row.key === key && Number.isFinite(Number(row.value))) {
+                values.push(Number(row.value));
+            }
+        });
+    });
+    if (!values.length) return null;
+    const max = Math.max(...values);
+    const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return { max, avg };
+}
+
+function sensorLevel(row) {
+    if (!row || row.threshold === null || row.threshold === undefined) return "normal";
+    const value = Number(row.value);
+    const threshold = Number(row.threshold);
+    if (!Number.isFinite(value) || !Number.isFinite(threshold) || threshold <= 0) return "normal";
+    if (value >= threshold) return "danger";
+    if (value >= threshold * 0.75) return "warning";
+    return "normal";
+}
+
+function updateSensorCards(data) {
+    const rows = data.sensor_rows || [];
+    rows.forEach((row) => {
+        const nodes = $$(`[data-sensor="${row.key}"]`);
+        const level = sensorLevel(row);
+        const stats = sensorHistoryStats(data, row.key);
+        const thresholdText = row.threshold === null || row.threshold === undefined ? "无" : `${row.threshold} ${row.unit}`;
+        const statsText = stats
+            ? `历史最高: ${stats.max.toFixed(2)} ${row.unit}\n历史平均: ${stats.avg.toFixed(2)} ${row.unit}`
+            : "历史数据: 暂无";
+        const title = `${row.name}\n当前值: ${row.value} ${row.unit}\n状态: ${row.status}\n阈值: ${thresholdText}\n${statsText}`;
+        nodes.forEach((node) => {
+            node.classList.toggle("warning", level === "warning");
+            node.classList.toggle("danger", level === "danger");
+            node.classList.toggle("normal", level === "normal");
+            node.classList.toggle("clickable", level !== "normal");
+            node.title = title;
+            node.dataset.level = level;
+        });
+    });
+}
+
+function goToView(view) {
+    const button = $(`.nav-item[data-view="${view}"]`);
+    if (button) button.click();
+}
+
+function focusRiskHandling() {
+    const riskPanel = $("#riskPanel");
+    if (riskPanel) riskPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+    const actionList = $("#actionList");
+    if (actionList) actionList.classList.add("pulse-focus");
+    setTimeout(() => actionList && actionList.classList.remove("pulse-focus"), 1100);
 }
 
 function renderActions(actions) {
@@ -523,9 +618,83 @@ function renderDetectedFaces(faces) {
         return;
     }
     list.innerHTML = faces.map((face) => {
-        const stranger = face.status === "陌生人";
-        return `<span class="face-chip ${stranger ? "stranger" : ""}">${esc(face.label)} · ${esc(face.status)}</span>`;
+        const stranger = face.status_code === "unknown" || face.status === "陌生人";
+        const text = stranger ? "未录入 · 已报警" : "已录入 · 授权通过";
+        return `<span class="face-chip ${stranger ? "stranger" : "known"}">${esc(face.label)} · ${text}</span>`;
     }).join("");
+}
+
+function renderDeviceStatus(data) {
+    const list = $("#deviceStatusList");
+    if (!list) return;
+    if (Array.isArray(data.devices) && data.devices.length) {
+        const preferred = ["ventilation", "suppression", "access_control", "bark_push"];
+        const picked = preferred.map((id) => data.devices.find((item) => item.id === id)).filter(Boolean);
+        list.innerHTML = picked.map((item) => (
+            `<article class="device-state ${esc(item.status_code)}"><span>${esc(item.name)}</span><strong>${esc(item.status)}</strong></article>`
+        )).join("");
+        return;
+    }
+    const level = Number(data.risk_level || 0);
+    const actions = Array.isArray(data.actions) ? data.actions.join(" ") : "";
+    const hasVentilation = /排风|通风/.test(actions);
+    const hasSuppression = Boolean(data.fire_suppression) || /灭火|抑制|惰性|冷却/.test(actions);
+    const hasAccess = /门禁|安全门|疏散/.test(actions);
+    const pushReady = Boolean(data.settings && data.settings.push_enabled && data.settings.bark_key);
+    const dangerClass = level >= 3 ? "danger" : level > 0 ? "warning" : "online";
+    const items = [
+        {
+            name: "通风系统",
+            value: hasVentilation ? "已联动" : "正常待命",
+            cls: hasVentilation ? dangerClass : "online"
+        },
+        {
+            name: "灭火抑制",
+            value: hasSuppression ? "已启用" : "待命",
+            cls: hasSuppression ? dangerClass : "standby"
+        },
+        {
+            name: "门禁联动",
+            value: hasAccess ? "疏散联动" : "正常",
+            cls: hasAccess ? dangerClass : "online"
+        },
+        {
+            name: "手机推送",
+            value: pushReady ? "Bark 已配置" : "未配置",
+            cls: pushReady ? "active" : "standby"
+        }
+    ];
+    list.innerHTML = items.map((item) => (
+        `<article class="device-state ${item.cls}"><span>${esc(item.name)}</span><strong>${esc(item.value)}</strong></article>`
+    )).join("");
+}
+
+function renderDeviceManager(devices = []) {
+    const table = $("#deviceTable");
+    if (!table) return;
+    const total = devices.length;
+    const online = devices.filter((item) => ["online", "active"].includes(item.status_code)).length;
+    const active = devices.filter((item) => item.status_code === "active" || item.status_code === "danger").length;
+    const issue = devices.filter((item) => !item.enabled || item.maintenance || ["offline", "warning"].includes(item.status_code)).length;
+    $("#deviceTotal") && ($("#deviceTotal").textContent = total);
+    $("#deviceOnline") && ($("#deviceOnline").textContent = online);
+    $("#deviceActive") && ($("#deviceActive").textContent = active);
+    $("#deviceIssue") && ($("#deviceIssue").textContent = issue);
+    const rows = devices.length ? devices : [];
+    table.innerHTML = `<thead><tr><th>设备</th><th>类型</th><th>位置</th><th>状态</th><th>说明</th><th>操作</th></tr></thead><tbody>${
+        rows.map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.category)}</td><td>${esc(item.location)}</td><td><span class="device-badge ${esc(item.status_code)}">${esc(item.status)}</span></td><td>${esc(item.note)}</td><td>
+            <button class="ghost-btn compact" data-device-id="${esc(item.id)}" data-device-action="toggle">${item.enabled ? "停用" : "启用"}</button>
+            <button class="ghost-btn compact" data-device-id="${esc(item.id)}" data-device-action="maintenance">${item.maintenance ? "结束维护" : "维护"}</button>
+        </td></tr>`).join("")
+    }</tbody>`;
+}
+
+async function loadDevices() {
+    const table = $("#deviceTable");
+    if (!table) return;
+    const result = await requestJSON("/api/devices");
+    if (!result) return;
+    renderDeviceManager(result.devices || []);
 }
 
 function renderMiniMembers(members) {
@@ -560,22 +729,42 @@ function renderThresholdList(data) {
     )).join("");
 }
 
+function fitCanvas(canvas, fallbackWidth = 920, fallbackHeight = 420) {
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.round(rect.width || fallbackWidth);
+    const height = Math.round(rect.height || fallbackHeight);
+    if (!width || !height) return null;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    return { ctx, width, height };
+}
+
+function rowColor(row) {
+    if (!row || row.status === "正常") return "#26d7d0";
+    return row.status === "预警" ? "#f1b648" : "#ef5d5d";
+}
+
 function drawRadar(rows) {
     const canvas = $("#radarChart");
     if (!canvas || !rows || !rows.length) return;
-    const ctx = canvas.getContext("2d");
-    const width = canvas.width;
-    const height = canvas.height;
-    ctx.clearRect(0, 0, width, height);
-
+    const fitted = fitCanvas(canvas, 920, 460);
+    if (!fitted) return;
+    const { ctx, width, height } = fitted;
     const points = rows.slice(0, 10);
     const cx = width / 2;
-    const cy = height / 2;
-    const radius = Math.min(width, height) * 0.34;
+    const cy = height / 2 + 8;
+    const radius = Math.min(width * 0.34, height * 0.36);
 
-    ctx.strokeStyle = "#253241";
-    ctx.fillStyle = "#8fa1b4";
-    ctx.font = "12px Microsoft YaHei, Arial";
+    ctx.lineWidth = 1;
+    ctx.font = "12px Microsoft YaHei, Arial, sans-serif";
+    ctx.textBaseline = "middle";
+
     for (let ring = 1; ring <= 4; ring += 1) {
         const r = radius * ring / 4;
         ctx.beginPath();
@@ -586,7 +775,11 @@ function drawRadar(rows) {
             index ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
         });
         ctx.closePath();
+        ctx.strokeStyle = ring === 4 ? "rgba(143, 161, 180, 0.42)" : "rgba(143, 161, 180, 0.18)";
         ctx.stroke();
+        ctx.fillStyle = "rgba(143, 161, 180, 0.70)";
+        ctx.textAlign = "left";
+        ctx.fillText(`${ring * 25}%`, cx + 8, cy - r);
     }
 
     points.forEach((row, index) => {
@@ -596,34 +789,170 @@ function drawRadar(rows) {
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.lineTo(axisX, axisY);
+        ctx.strokeStyle = "rgba(143, 161, 180, 0.24)";
         ctx.stroke();
-        const labelX = cx + Math.cos(angle) * (radius + 42);
-        const labelY = cy + Math.sin(angle) * (radius + 28);
-        ctx.textAlign = labelX < cx - 10 ? "right" : labelX > cx + 10 ? "left" : "center";
-        ctx.fillText(`${row.name} ${row.ratio}%`, labelX, labelY);
+
+        const labelX = cx + Math.cos(angle) * (radius + 58);
+        const labelY = cy + Math.sin(angle) * (radius + 36);
+        const align = labelX < cx - 12 ? "right" : labelX > cx + 12 ? "left" : "center";
+        ctx.textAlign = align;
+        ctx.fillStyle = rowColor(row);
+        ctx.font = "13px Microsoft YaHei, Arial, sans-serif";
+        ctx.fillText(row.name, labelX, labelY - 8);
+        ctx.fillStyle = "#dce8f3";
+        ctx.font = "12px Microsoft YaHei, Arial, sans-serif";
+        ctx.fillText(`${row.ratio}% · ${row.status}`, labelX, labelY + 10);
+    });
+
+    const polygon = points.map((row, index) => {
+        const angle = -Math.PI / 2 + index * Math.PI * 2 / points.length;
+        const r = radius * Math.max(0, Math.min(100, Number(row.ratio))) / 100;
+        return { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r, row };
     });
 
     ctx.beginPath();
-    points.forEach((row, index) => {
-        const angle = -Math.PI / 2 + index * Math.PI * 2 / points.length;
-        const r = radius * Math.max(0, Math.min(100, Number(row.ratio))) / 100;
-        const x = cx + Math.cos(angle) * r;
-        const y = cy + Math.sin(angle) * r;
-        index ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    polygon.forEach((point, index) => {
+        index ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y);
     });
     ctx.closePath();
-    ctx.fillStyle = "rgba(38, 215, 208, 0.22)";
+    ctx.fillStyle = "rgba(38, 215, 208, 0.20)";
     ctx.strokeStyle = "#26d7d0";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.fill();
     ctx.stroke();
+
+    polygon.forEach((point) => {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = rowColor(point.row);
+        ctx.fill();
+        ctx.strokeStyle = "#081018";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    });
+}
+
+function trendPoints(data, sensorKey) {
+    const history = (data.trend_history || data.latest_sensor_history || []).slice().reverse();
+    return history.map((snapshot) => {
+        const row = (snapshot.rows || []).find((item) => item.key === sensorKey);
+        if (!row || !Number.isFinite(Number(row.value))) return null;
+        return {
+            time: snapshot.time || "--",
+            value: Number(row.value),
+            unit: row.unit || "",
+            name: row.name || sensorKey,
+            status: row.status || "正常",
+            accident_type: snapshot.accident_type || "无",
+            risk_level: snapshot.risk_level || 0
+        };
+    }).filter(Boolean);
+}
+
+function drawTrendChart(data) {
+    const canvas = $("#trendChart");
+    const select = $("#trendSensorSelect");
+    if (!canvas || !select) return;
+    const points = trendPoints(data, select.value);
+    const fitted = fitCanvas(canvas, 920, 360);
+    if (!fitted) return;
+    const { ctx, width, height } = fitted;
+    const padding = { left: 58, right: 24, top: 28, bottom: 52 };
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    ctx.font = "12px Microsoft YaHei, Arial, sans-serif";
+    ctx.textBaseline = "middle";
+    if (!points.length) {
+        ctx.fillStyle = "#8fa1b4";
+        ctx.textAlign = "center";
+        ctx.fillText("暂无历史趋势数据", width / 2, height / 2);
+        return;
+    }
+
+    const values = points.map((point) => point.value);
+    let min = Math.min(...values);
+    let max = Math.max(...values);
+    if (min === max) {
+        min -= 1;
+        max += 1;
+    }
+    const span = max - min;
+    min -= span * 0.12;
+    max += span * 0.12;
+
+    ctx.strokeStyle = "rgba(143, 161, 180, 0.22)";
+    ctx.fillStyle = "#8fa1b4";
     ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i += 1) {
+        const y = padding.top + plotHeight * i / 4;
+        const value = max - (max - min) * i / 4;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(width - padding.right, y);
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.fillText(value.toFixed(1), padding.left - 10, y);
+    }
+
+    const xFor = (index) => padding.left + (points.length === 1 ? plotWidth : plotWidth * index / (points.length - 1));
+    const yFor = (value) => padding.top + plotHeight * (1 - (value - min) / (max - min));
+
+    ctx.beginPath();
+    points.forEach((point, index) => {
+        const x = xFor(index);
+        const y = yFor(point.value);
+        index ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = "#26d7d0";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    points.forEach((point, index) => {
+        if (points.length > 30 && index % Math.ceil(points.length / 24) !== 0) return;
+        const x = xFor(index);
+        const y = yFor(point.value);
+        ctx.beginPath();
+        ctx.arc(x, y, point.status === "正常" ? 3 : 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = point.status === "正常" ? "#26d7d0" : (point.status === "预警" ? "#f1b648" : "#ef5d5d");
+        ctx.fill();
+    });
+
+    ctx.fillStyle = "#dce8f3";
+    ctx.textAlign = "left";
+    const latest = points[points.length - 1];
+    ctx.fillText(`${latest.name} 最新值 ${latest.value} ${latest.unit}`, padding.left, 16);
+    ctx.fillStyle = "#8fa1b4";
+    ctx.textAlign = "center";
+    const labelEvery = Math.max(1, Math.ceil(points.length / 5));
+    points.forEach((point, index) => {
+        if (index % labelEvery !== 0 && index !== points.length - 1) return;
+        const x = xFor(index);
+        ctx.fillText(String(point.time).slice(5, 16), x, height - 24);
+    });
+}
+
+function renderTrendTable(data) {
+    const table = $("#trendTable");
+    const select = $("#trendSensorSelect");
+    if (!table || !select) return;
+    const points = trendPoints(data, select.value).slice(-12).reverse();
+    table.innerHTML = `<thead><tr><th>时间</th><th>监测项</th><th>数值</th><th>状态</th><th>风险等级</th><th>事故类型</th></tr></thead><tbody>${
+        (points.length ? points : [{ time: "--", name: "暂无数据", value: "--", unit: "", status: "--", risk_level: "--", accident_type: "--" }])
+            .map((point) => `<tr><td>${esc(point.time)}</td><td>${esc(point.name)}</td><td>${esc(point.value)} ${esc(point.unit)}</td><td>${esc(point.status)}</td><td>${esc(point.risk_level)}</td><td>${esc(point.accident_type)}</td></tr>`)
+            .join("")
+    }</tbody>`;
+}
+
+function renderTrendView(data) {
+    drawTrendChart(data);
+    renderTrendTable(data);
 }
 
 async function updateDashboard() {
     if (!$("#view-dashboard")) return;
     const data = await requestJSON("/api/data");
     if (!data) return;
+    window.__dashboardData = data;
 
     updateTopClock(data.server_time);
     $("#roomTemp").textContent = data.room_temp.toFixed(1);
@@ -652,6 +981,8 @@ async function updateDashboard() {
 
     const riskPanel = $("#riskPanel");
     riskPanel.className = `risk-panel level-${data.risk_level}`;
+    riskPanel.classList.toggle("clickable", Number(data.risk_level || 0) > 0);
+    riskPanel.title = Number(data.risk_level || 0) > 0 ? "点击查看报警处置流程" : "当前无风险";
     $("#riskText").textContent = data.risk_text.replace(/[✅📢⚠️🚨]/g, "").trim() || "系统正常";
     $("#riskReason").textContent = data.risk_reason;
     $("#accidentType").textContent = `当前事故：${data.accident_type || "无"}`;
@@ -697,11 +1028,15 @@ async function updateDashboard() {
 
     renderActions(data.actions);
     renderSequence(data.emergency_sequence);
+    renderDeviceStatus(data);
+    renderDeviceManager(data.devices || []);
+    updateSensorCards(data);
     renderAlertPreview(data.alert_history);
     renderDetectedFaces(data.detected_faces);
     renderSensorTable(data);
     renderThresholdList(data);
     drawRadar(data.sensor_rows);
+    renderTrendView(data);
 
     $("#statMembers") && ($("#statMembers").textContent = data.members);
     $("#statFaces") && ($("#statFaces").textContent = data.current_faces);
@@ -728,10 +1063,15 @@ async function loadFaceMembers() {
     renderMiniMembers(result.members);
     const totalSamples = result.members.reduce((sum, item) => sum + Number(item.samples || 0), 0);
     $("#facePageSamples") && ($("#facePageSamples").textContent = totalSamples);
-    table.innerHTML = `<thead><tr><th>姓名</th><th>样本数</th><th>状态</th><th>操作</th></tr></thead><tbody>${
-        rows.map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.samples)}</td><td>${esc(item.status)}</td><td>${
+    table.innerHTML = `<thead><tr><th>姓名</th><th>有效样本</th><th>状态</th><th>操作</th></tr></thead><tbody>${
+        rows.map((item) => {
+            const total = Number(item.total_samples || item.samples || 0);
+            const samples = Number(item.samples || 0);
+            const sampleText = total && total !== samples ? `${samples} / ${total}` : String(samples);
+            return `<tr><td>${esc(item.name)}</td><td>${esc(sampleText)}</td><td>${esc(item.status)}</td><td>${
             item.name === "暂无人员" ? "" : `<button class="table-action" data-delete-face="${esc(item.name)}">删除</button>`
-        }</td></tr>`).join("")
+        }</td></tr>`;
+        }).join("")
     }</tbody>`;
 }
 
@@ -806,6 +1146,7 @@ function initDashboardActions() {
     loadLogs();
     loadUsers();
     loadSettings();
+    loadDevices();
     updateDashboard();
     updateTopClock();
     setInterval(updateDashboard, 1000);
@@ -856,7 +1197,35 @@ function initDashboardActions() {
         }
     });
 
+    const refreshDeviceBtn = $("#refreshDeviceBtn");
+    if (refreshDeviceBtn) {
+        refreshDeviceBtn.addEventListener("click", loadDevices);
+    }
+
+    const trendSelect = $("#trendSensorSelect");
+    if (trendSelect) {
+        trendSelect.addEventListener("change", () => renderTrendView(window.__dashboardData || {}));
+    }
+
     document.addEventListener("click", async (event) => {
+        const alertSummary = event.target.closest("#alertSummary");
+        if (alertSummary) {
+            goToView("logs");
+            return;
+        }
+
+        const riskTarget = event.target.closest("#riskPanel");
+        if (riskTarget && riskTarget.classList.contains("clickable")) {
+            focusRiskHandling();
+            return;
+        }
+
+        const abnormalSensor = event.target.closest("[data-sensor].clickable");
+        if (abnormalSensor) {
+            focusRiskHandling();
+            return;
+        }
+
         const simButton = event.target.closest("[data-sim]");
         if (simButton) {
             await runSimulation(simButton);
@@ -866,6 +1235,28 @@ function initDashboardActions() {
         const exportType = event.target.dataset.export;
         if (exportType) {
             window.location.href = `/api/export/${exportType}`;
+            return;
+        }
+
+        const reportButton = event.target.closest("[data-report-period][data-report-format]");
+        if (reportButton) {
+            const period = reportButton.dataset.reportPeriod;
+            const format = reportButton.dataset.reportFormat;
+            window.location.href = `/api/report/${period}/${format}`;
+            return;
+        }
+
+        const deviceButton = event.target.closest("[data-device-id][data-device-action]");
+        if (deviceButton) {
+            const result = await requestJSON("/api/devices", {
+                method: "POST",
+                body: JSON.stringify({
+                    id: deviceButton.dataset.deviceId,
+                    action: deviceButton.dataset.deviceAction
+                })
+            });
+            toast((result && result.message) || "设备状态已更新");
+            if (result && result.devices) renderDeviceManager(result.devices);
             return;
         }
 
@@ -935,6 +1326,18 @@ function initDashboardActions() {
             toast("日志已清空");
             loadLogs();
         }
+    });
+
+    $("#testPushBtn").addEventListener("click", async () => {
+        const form = $("#settingsForm");
+        const result = await requestJSON("/api/push/test", {
+            method: "POST",
+            body: JSON.stringify({
+                bark_key: form.bark_key.value.trim(),
+                push_enabled: form.push_enabled.checked
+            })
+        });
+        toast((result && result.message) || "测试推送已发送");
     });
 
     $("#settingsForm").addEventListener("submit", async (event) => {
