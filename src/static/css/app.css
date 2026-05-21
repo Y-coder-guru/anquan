@@ -807,6 +807,14 @@ select:focus {
     font-size: 12px;
 }
 
+.snapshot-link {
+    color: var(--cyan);
+    display: inline-block;
+    font-size: 12px;
+    margin-top: 6px;
+    text-decoration: none;
+}
+
 .data-table {
     width: 100%;
     border-collapse: collapse;

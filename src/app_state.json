@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "saved_at": "2026-05-21 09:51:46",
+  "saved_at": "2026-05-21 10:16:25",
   "settings": {
     "camera_index": 0,
     "tolerance": 60,
@@ -27,6 +27,62 @@
     "reactor_pressure_alarm": 1.2
   },
   "system_logs": [
+    {
+      "time": "2026-05-21 10:16:18",
+      "message": "📷 摄像头已关闭"
+    },
+    {
+      "time": "2026-05-21 10:16:05",
+      "message": "📷 浏览器端摄像头已连接"
+    },
+    {
+      "time": "2026-05-21 10:15:56",
+      "message": "📱 推送(1级): 实验人员, 实验室管理员"
+    },
+    {
+      "time": "2026-05-21 10:15:56",
+      "message": "✅ 系统已恢复正常"
+    },
+    {
+      "time": "2026-05-21 10:15:55",
+      "message": "【📢 一级预警】瓦斯泄漏"
+    },
+    {
+      "time": "2026-05-21 10:15:55",
+      "message": "💨 模拟瓦斯泄漏: CH₄浓度8000ppm"
+    },
+    {
+      "time": "2026-05-21 10:15:55",
+      "message": "✅ 系统已恢复正常"
+    },
+    {
+      "time": "2026-05-21 10:15:54",
+      "message": "【🚨 三级紧急】反应釜火灾"
+    },
+    {
+      "time": "2026-05-21 10:15:54",
+      "message": "⚗️ 模拟反应釜火灾: 釜温95℃"
+    },
+    {
+      "time": "2026-05-21 10:15:53",
+      "message": "✅ 系统已恢复正常"
+    },
+    {
+      "time": "2026-05-21 10:15:50",
+      "message": "【🚨 三级紧急】室内火灾"
+    },
+    {
+      "time": "2026-05-21 10:15:50",
+      "message": "🔥 模拟室内火灾: 烟雾35%"
+    },
+    {
+      "time": "2026-05-21 10:15:26",
+      "message": "🔐 用户登录: admin"
+    },
+    {
+      "time": "2026-05-21 10:15:20",
+      "message": "🚀 Flask Web 监控服务已启动"
+    },
     {
       "time": "2026-05-21 09:51:25",
       "message": "📷 摄像头已关闭"
@@ -329,6 +385,297 @@
     }
   ],
   "sensor_history": [
+    {
+      "time": "2026-05-21 10:16:21",
+      "risk_level": 0,
+      "accident_type": "无",
+      "rows": [
+        {
+          "key": "room_temp",
+          "name": "室温",
+          "value": 25.84,
+          "unit": "℃",
+          "threshold": 35.0,
+          "status": "正常",
+          "ratio": 43.1
+        },
+        {
+          "key": "humidity",
+          "name": "湿度",
+          "value": 46.48,
+          "unit": "%",
+          "threshold": null,
+          "status": "正常",
+          "ratio": 46.5
+        },
+        {
+          "key": "smoke",
+          "name": "烟雾",
+          "value": 5,
+          "unit": "%",
+          "threshold": 30.0,
+          "status": "正常",
+          "ratio": 5.0
+        },
+        {
+          "key": "voc",
+          "name": "VOC",
+          "value": 64,
+          "unit": "ppb",
+          "threshold": 200.0,
+          "status": "正常",
+          "ratio": 3.2
+        },
+        {
+          "key": "gas_ch4",
+          "name": "瓦斯 CH₄",
+          "value": 29,
+          "unit": "ppm",
+          "threshold": 5000.0,
+          "status": "正常",
+          "ratio": 0.1
+        },
+        {
+          "key": "gas_h2",
+          "name": "氢气 H₂",
+          "value": 92,
+          "unit": "ppm",
+          "threshold": null,
+          "status": "正常",
+          "ratio": 0.2
+        },
+        {
+          "key": "gas_co",
+          "name": "一氧化碳 CO",
+          "value": 9,
+          "unit": "ppm",
+          "threshold": 35.0,
+          "status": "正常",
+          "ratio": 2.2
+        },
+        {
+          "key": "gas_h2s",
+          "name": "硫化氢 H₂S",
+          "value": 3,
+          "unit": "ppm",
+          "threshold": 20.0,
+          "status": "正常",
+          "ratio": 3.0
+        },
+        {
+          "key": "reactor_temp",
+          "name": "反应釜温度",
+          "value": 46.47,
+          "unit": "℃",
+          "threshold": 90.0,
+          "status": "正常",
+          "ratio": 38.7
+        },
+        {
+          "key": "reactor_pressure",
+          "name": "反应釜压力",
+          "value": 0.43,
+          "unit": "MPa",
+          "threshold": 1.2,
+          "status": "正常",
+          "ratio": 21.7
+        }
+      ]
+    },
+    {
+      "time": "2026-05-21 10:15:51",
+      "risk_level": 3,
+      "accident_type": "室内火灾",
+      "rows": [
+        {
+          "key": "room_temp",
+          "name": "室温",
+          "value": 22.68,
+          "unit": "℃",
+          "threshold": 35.0,
+          "status": "正常",
+          "ratio": 37.8
+        },
+        {
+          "key": "humidity",
+          "name": "湿度",
+          "value": 50.09,
+          "unit": "%",
+          "threshold": null,
+          "status": "正常",
+          "ratio": 50.1
+        },
+        {
+          "key": "smoke",
+          "name": "烟雾",
+          "value": 35,
+          "unit": "%",
+          "threshold": 30.0,
+          "status": "报警",
+          "ratio": 35.0
+        },
+        {
+          "key": "voc",
+          "name": "VOC",
+          "value": 93.0,
+          "unit": "ppb",
+          "threshold": 200.0,
+          "status": "正常",
+          "ratio": 4.7
+        },
+        {
+          "key": "gas_ch4",
+          "name": "瓦斯 CH₄",
+          "value": 337,
+          "unit": "ppm",
+          "threshold": 5000.0,
+          "status": "正常",
+          "ratio": 0.7
+        },
+        {
+          "key": "gas_h2",
+          "name": "氢气 H₂",
+          "value": 0,
+          "unit": "ppm",
+          "threshold": null,
+          "status": "正常",
+          "ratio": 0
+        },
+        {
+          "key": "gas_co",
+          "name": "一氧化碳 CO",
+          "value": 6,
+          "unit": "ppm",
+          "threshold": 35.0,
+          "status": "正常",
+          "ratio": 1.5
+        },
+        {
+          "key": "gas_h2s",
+          "name": "硫化氢 H₂S",
+          "value": 1,
+          "unit": "ppm",
+          "threshold": 20.0,
+          "status": "正常",
+          "ratio": 1.0
+        },
+        {
+          "key": "reactor_temp",
+          "name": "反应釜温度",
+          "value": 46.9,
+          "unit": "℃",
+          "threshold": 90.0,
+          "status": "正常",
+          "ratio": 39.1
+        },
+        {
+          "key": "reactor_pressure",
+          "name": "反应釜压力",
+          "value": 0.36,
+          "unit": "MPa",
+          "threshold": 1.2,
+          "status": "正常",
+          "ratio": 18.2
+        }
+      ]
+    },
+    {
+      "time": "2026-05-21 10:15:20",
+      "risk_level": 0,
+      "accident_type": "无",
+      "rows": [
+        {
+          "key": "room_temp",
+          "name": "室温",
+          "value": 22.86,
+          "unit": "℃",
+          "threshold": 35.0,
+          "status": "正常",
+          "ratio": 38.1
+        },
+        {
+          "key": "humidity",
+          "name": "湿度",
+          "value": 45.91,
+          "unit": "%",
+          "threshold": null,
+          "status": "正常",
+          "ratio": 45.9
+        },
+        {
+          "key": "smoke",
+          "name": "烟雾",
+          "value": 8.0,
+          "unit": "%",
+          "threshold": 30.0,
+          "status": "正常",
+          "ratio": 8.0
+        },
+        {
+          "key": "voc",
+          "name": "VOC",
+          "value": 109.0,
+          "unit": "ppb",
+          "threshold": 200.0,
+          "status": "正常",
+          "ratio": 5.5
+        },
+        {
+          "key": "gas_ch4",
+          "name": "瓦斯 CH₄",
+          "value": 379.0,
+          "unit": "ppm",
+          "threshold": 5000.0,
+          "status": "正常",
+          "ratio": 0.8
+        },
+        {
+          "key": "gas_h2",
+          "name": "氢气 H₂",
+          "value": 91.0,
+          "unit": "ppm",
+          "threshold": null,
+          "status": "正常",
+          "ratio": 0.2
+        },
+        {
+          "key": "gas_co",
+          "name": "一氧化碳 CO",
+          "value": 5.0,
+          "unit": "ppm",
+          "threshold": 35.0,
+          "status": "正常",
+          "ratio": 1.2
+        },
+        {
+          "key": "gas_h2s",
+          "name": "硫化氢 H₂S",
+          "value": 2.0,
+          "unit": "ppm",
+          "threshold": 20.0,
+          "status": "正常",
+          "ratio": 2.0
+        },
+        {
+          "key": "reactor_temp",
+          "name": "反应釜温度",
+          "value": 45.53,
+          "unit": "℃",
+          "threshold": 90.0,
+          "status": "正常",
+          "ratio": 37.9
+        },
+        {
+          "key": "reactor_pressure",
+          "name": "反应釜压力",
+          "value": 0.47,
+          "unit": "MPa",
+          "threshold": 1.2,
+          "status": "正常",
+          "ratio": 23.4
+        }
+      ]
+    },
     {
       "time": "2026-05-21 09:51:29",
       "risk_level": 0,
@@ -2950,19 +3297,40 @@
     }
   ],
   "sensor_values": {
-    "room_temp": 22.736640534041236,
-    "humidity": 45.618807291170654,
-    "smoke": 8,
-    "voc": 107.0,
-    "gas_ch4": 389,
-    "gas_h2": 94.0,
-    "gas_co": 5.0,
-    "gas_h2s": 1,
-    "reactor_temp": 45.330830388771275,
-    "reactor_pressure": 0.47164442275427704
+    "room_temp": 26.1740414850742,
+    "humidity": 47.26128897422367,
+    "smoke": 5,
+    "voc": 71,
+    "gas_ch4": 29,
+    "gas_h2": 77,
+    "gas_co": 10,
+    "gas_h2s": 3,
+    "reactor_temp": 45.87203865086456,
+    "reactor_pressure": 0.4260689931765573
   },
   "monitor_data": {
     "alert_history": [
+      {
+        "time": "2026-05-21 10:15:55",
+        "level": 1,
+        "level_text": "📢 一级预警",
+        "type": "瓦斯泄漏",
+        "message": "瓦斯泄漏触发，执行联动"
+      },
+      {
+        "time": "2026-05-21 10:15:54",
+        "level": 3,
+        "level_text": "🚨 三级紧急",
+        "type": "反应釜火灾",
+        "message": "反应釜火灾触发，执行联动"
+      },
+      {
+        "time": "2026-05-21 10:15:50",
+        "level": 3,
+        "level_text": "🚨 三级紧急",
+        "type": "室内火灾",
+        "message": "室内火灾触发，执行联动"
+      },
       {
         "time": "2026-05-21 09:22:12",
         "level": 3,
@@ -3050,6 +3418,50 @@
     ],
     "action_history": [
       {
+        "time": "10:15:55",
+        "action": "🔊 预警提示"
+      },
+      {
+        "time": "10:15:55",
+        "action": "🔒 关闭气源"
+      },
+      {
+        "time": "10:15:55",
+        "action": "💨 启动防爆排风"
+      },
+      {
+        "time": "10:15:54",
+        "action": "🔧 打开泄压阀"
+      },
+      {
+        "time": "10:15:54",
+        "action": "🔒 关闭进料阀"
+      },
+      {
+        "time": "10:15:54",
+        "action": "💨 注入惰性气体"
+      },
+      {
+        "time": "10:15:54",
+        "action": "❄️ 启动夹套冷却"
+      },
+      {
+        "time": "10:15:50",
+        "action": "🚪 自动打开安全门"
+      },
+      {
+        "time": "10:15:50",
+        "action": "📢 紧急疏散广播"
+      },
+      {
+        "time": "10:15:50",
+        "action": "🧯 启动自动灭火装置"
+      },
+      {
+        "time": "10:15:50",
+        "action": "🔌 切断总电源"
+      },
+      {
         "time": "09:22:12",
         "action": "🚪 自动打开安全门"
       },
@@ -3164,50 +3576,6 @@
       {
         "time": "08:06:25",
         "action": "🔒 关闭气源"
-      },
-      {
-        "time": "08:06:25",
-        "action": "💨 启动防爆排风"
-      },
-      {
-        "time": "08:05:56",
-        "action": "🚪 自动打开安全门"
-      },
-      {
-        "time": "08:05:56",
-        "action": "📢 紧急疏散广播"
-      },
-      {
-        "time": "08:05:56",
-        "action": "🧯 启动自动灭火装置"
-      },
-      {
-        "time": "08:05:56",
-        "action": "🔌 切断总电源"
-      },
-      {
-        "time": "02:53:39",
-        "action": "🔊 预警提示"
-      },
-      {
-        "time": "02:53:39",
-        "action": "🔒 关闭气源"
-      },
-      {
-        "time": "02:53:39",
-        "action": "💨 启动防爆排风"
-      },
-      {
-        "time": "02:52:47",
-        "action": "🚪 自动打开安全门"
-      },
-      {
-        "time": "02:52:47",
-        "action": "📢 紧急疏散广播"
-      },
-      {
-        "time": "02:52:47",
-        "action": "🧯 启动自动灭火装置"
       }
     ],
     "stranger_alarm_count": 0,

@@ -5,9 +5,10 @@ let browserCameraTimer = null;
 let sendingFrame = false;
 let frameFailureCount = 0;
 let activeCameraMode = "none";
-const CAMERA_ANALYSIS_MAX_WIDTH = 420;
-const CAMERA_ANALYSIS_INTERVAL_MS = 320;
-const CAMERA_JPEG_QUALITY = 0.55;
+let cameraRecognitionEnabled = false;
+const CAMERA_ANALYSIS_MAX_WIDTH = 320;
+const CAMERA_ANALYSIS_INTERVAL_MS = 900;
+const CAMERA_JPEG_QUALITY = 0.45;
 
 async function requestJSON(url, options = {}) {
     try {
@@ -88,6 +89,7 @@ function setBrowserPreviewActive(isActive) {
 }
 
 function stopBrowserPreview() {
+    cameraRecognitionEnabled = false;
     frameFailureCount = 0;
     clearInterval(browserCameraTimer);
     browserCameraTimer = null;
@@ -99,6 +101,23 @@ function stopBrowserPreview() {
     const video = $("#localCameraVideo");
     if (video) video.srcObject = null;
     setBrowserPreviewActive(false);
+}
+
+async function startBrowserRecognition() {
+    const result = await requestJSON("/api/client-camera/start", { method: "POST", body: "{}" });
+    if (!result || !result.success) {
+        cameraRecognitionEnabled = false;
+        clearInterval(browserCameraTimer);
+        browserCameraTimer = null;
+        const message = (result && result.message) || "后端识别服务启动失败";
+        setCameraHint(`前端摄像头已打开，但人脸识别后台不可用：${message}`, "warning");
+        return false;
+    }
+    cameraRecognitionEnabled = true;
+    clearInterval(browserCameraTimer);
+    browserCameraTimer = setInterval(sendBrowserFrame, CAMERA_ANALYSIS_INTERVAL_MS);
+    setCameraHint("前端摄像头实时预览中，后台低频做人脸识别，不再用后端回传视频画面。", "ok");
+    return true;
 }
 
 async function startServerCamera(reason = "") {
@@ -249,12 +268,6 @@ async function startBrowserCamera() {
         return startServerCamera(cameraSecureHelp());
     }
 
-    const result = await requestJSON("/api/client-camera/start", { method: "POST", body: "{}" });
-    if (!result || !result.success) {
-        const message = (result && result.message) || "服务器端识别服务启动失败";
-        return startServerCamera(message);
-    }
-
     try {
         browserCameraStream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -271,15 +284,14 @@ async function startBrowserCamera() {
         activeCameraMode = "browser";
         setBrowserPreviewActive(true);
         $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;
-        clearInterval(browserCameraTimer);
-        browserCameraTimer = setInterval(sendBrowserFrame, CAMERA_ANALYSIS_INTERVAL_MS);
         const start = $("#startCameraBtn");
         const stop = $("#stopCameraBtn");
         if (start) start.disabled = true;
         if (stop) stop.disabled = false;
-        setCameraStateText("浏览器摄像头已打开");
-        setCameraHint("摄像头已连接，系统正在把浏览器画面发送到后端进行人脸识别。", "ok");
+        setCameraStateText("前端摄像头已打开");
+        setCameraHint("前端摄像头已打开，正在启动后台人脸识别。", "ok");
         toast("浏览器摄像头已打开");
+        await startBrowserRecognition();
     } catch (error) {
         await requestJSON("/api/camera/stop", { method: "POST", body: "{}" });
         activeCameraMode = "none";
@@ -299,7 +311,7 @@ function stopBrowserCamera() {
 }
 
 async function sendBrowserFrame() {
-    if (sendingFrame || !browserCameraStream) return;
+    if (!cameraRecognitionEnabled || sendingFrame || !browserCameraStream) return;
     const video = $("#localCameraVideo");
     const canvas = $("#clientFrameCanvas");
     if (!video || !canvas || video.readyState < 2) return;
@@ -344,6 +356,12 @@ async function sendBrowserFrame() {
             if (frameFailureCount < 3) {
                 frameFailureCount += 1;
                 setCameraHint(`画面发送失败：${error.message}`, "error");
+            }
+            if (frameFailureCount >= 3) {
+                cameraRecognitionEnabled = false;
+                clearInterval(browserCameraTimer);
+                browserCameraTimer = null;
+                setCameraHint("前端预览仍在运行，后台识别连续失败，已暂停识别传帧。", "warning");
             }
             console.warn("client frame failed", error);
         } finally {
@@ -489,7 +507,10 @@ function renderAlertPreview(history) {
         const row = document.createElement("div");
         row.className = "log-entry";
         const label = item.level_text ? `${item.level_text} · ${item.type || ""}` : (item.type || "报警记录");
-        row.innerHTML = `<time>${esc(item.time || "--")}</time><span>${esc(label)}<br>${esc(item.message || "暂无记录")}</span>`;
+        const snapshot = item.snapshot_url
+            ? `<a class="snapshot-link" href="${esc(item.snapshot_url)}" target="_blank" rel="noopener">查看抓拍</a>`
+            : "";
+        row.innerHTML = `<time>${esc(item.time || "--")}</time><span>${esc(label)}<br>${esc(item.message || "暂无记录")}${snapshot}</span>`;
         container.appendChild(row);
     });
 }
@@ -637,12 +658,14 @@ async function updateDashboard() {
     $("#fireSuppression").textContent = `灭火/抑制：${data.fire_suppression || "待命"}`;
     $("#riskLevelBadge").textContent = `${data.risk_level}级`;
     const cameraStatusPill = $("#cameraStatusPill");
-    cameraStatusPill.textContent = data.camera_running ? "摄像头运行中" : "摄像头未启动";
-    cameraStatusPill.classList.toggle("offline", !data.camera_running);
+    const hasLocalPreview = Boolean(browserCameraStream);
+    const isCameraActive = hasLocalPreview || data.camera_running || activeCameraMode === "server";
+    cameraStatusPill.textContent = isCameraActive ? "摄像头运行中" : "摄像头未启动";
+    cameraStatusPill.classList.toggle("offline", !isCameraActive);
     cameraStatusPill.classList.toggle("alert", Boolean(data.unknown_face_count));
     $("#cameraState").textContent = data.camera_running
         ? `${data.camera_source === "browser" ? "浏览器摄像头" : "服务器摄像头"} · 当前检测 ${data.current_faces} · 陌生人 ${data.unknown_face_count}`
-        : (data.camera_error || "未启动");
+        : (hasLocalPreview ? "前端摄像头预览中 · 后台识别未连接" : (data.camera_error || "未启动"));
     if (data.camera_running && data.camera_source === "server") {
         activeCameraMode = "server";
         stopBrowserPreview();
@@ -659,8 +682,8 @@ async function updateDashboard() {
         $("#stopCameraBtn").disabled = false;
         $("#addFaceBtn").disabled = true;
     } else {
-        $("#startCameraBtn").disabled = data.camera_running;
-        $("#stopCameraBtn").disabled = !data.camera_running;
+        $("#startCameraBtn").disabled = isCameraActive;
+        $("#stopCameraBtn").disabled = !isCameraActive;
         $("#addFaceBtn").disabled = !data.camera_running;
     }
     $("#faceCurrentCount").textContent = data.current_faces;
@@ -759,6 +782,23 @@ async function loadSettings() {
     });
 }
 
+async function runSimulation(button) {
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    try {
+        const result = await requestJSON(`/api/simulate/${button.dataset.sim}`, { method: "POST", body: "{}" });
+        if (result && result.success) {
+            toast(result.message || "操作已执行");
+            await updateDashboard();
+            loadLogs();
+            return;
+        }
+        toast((result && result.message) || "操作失败");
+    } finally {
+        button.disabled = false;
+    }
+}
+
 function initDashboardActions() {
     if (!$("#view-dashboard")) return;
     initNavigation();
@@ -783,8 +823,11 @@ function initDashboardActions() {
     $("#stopCameraBtn").addEventListener("click", async () => {
         stopBrowserCamera();
         const result = await requestJSON("/api/camera/stop", { method: "POST", body: "{}" });
-        toast(result.message);
-        if (result.success) $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;
+        toast((result && result.message) || "摄像头已关闭");
+        $("#startCameraBtn").disabled = false;
+        $("#stopCameraBtn").disabled = true;
+        $("#addFaceBtn").disabled = true;
+        $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;
     });
 
     $("#addFaceBtn").addEventListener("click", async () => {
@@ -813,23 +856,13 @@ function initDashboardActions() {
         }
     });
 
-    $$("[data-sim]").forEach((button) => {
-        button.addEventListener("click", async () => {
-            button.disabled = true;
-            try {
-                const result = await requestJSON(`/api/simulate/${button.dataset.sim}`, { method: "POST", body: "{}" });
-                if (result && result.success) {
-                    toast(result.message || "操作已执行");
-                    await updateDashboard();
-                }
-                if (result && !result.success) toast(result.message || "操作失败");
-            } finally {
-                button.disabled = false;
-            }
-        });
-    });
-
     document.addEventListener("click", async (event) => {
+        const simButton = event.target.closest("[data-sim]");
+        if (simButton) {
+            await runSimulation(simButton);
+            return;
+        }
+
         const exportType = event.target.dataset.export;
         if (exportType) {
             window.location.href = `/api/export/${exportType}`;

@@ -36,6 +36,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FACE_DB_FILE = os.path.join(BASE_DIR, "lab_members.pkl")
 USER_DB_FILE = os.path.join(BASE_DIR, "users.pkl")
 APP_STATE_FILE = os.path.join(BASE_DIR, "app_state.json")
+SNAPSHOT_DIR = os.path.join(BASE_DIR, "static", "snapshots")
 
 TOLERANCE = 60
 ALARM_INTERVAL = 30
@@ -45,7 +46,7 @@ PUSH_ENABLED = True
 STATE_SAVE_INTERVAL = 8
 SENSOR_HISTORY_INTERVAL = 30
 SENSOR_HISTORY_LIMIT = 720
-ASSET_VERSION = "20260521-camera-fallback"
+ASSET_VERSION = "20260521-front-camera-storage"
 
 web_app = Flask(__name__, template_folder="templates", static_folder="static")
 web_app.secret_key = "zhixunweishi_secret_key_2024"
@@ -557,6 +558,7 @@ class LabSafetyService:
                     "emergency_sequence": NORMAL_SEQUENCE[:],
                     "fire_suppression": None
                 })
+                mark_state_dirty()
                 return
 
             level_text = {1: "📢 一级预警", 2: "⚠️ 二级报警", 3: "🚨 三级紧急"}[level]
@@ -588,6 +590,7 @@ class LabSafetyService:
                     "action": action
                 })
             del monitor_data["action_history"][40:]
+            mark_state_dirty()
         add_log(f"【{level_text}】{accident_name}")
         self.send_bark_push(level, level_text, accident_name)
 
@@ -764,7 +767,7 @@ class LabSafetyService:
                 label = "STRANGER"
                 status = "陌生人"
                 self.unknown_face_count += 1
-                self.handle_stranger_alarm(x, y)
+                self.handle_stranger_alarm(x, y, frame, (box_x, box_y, box_w, box_h))
             detected_faces.append({
                 "label": label,
                 "status": status,
@@ -782,13 +785,42 @@ class LabSafetyService:
             self.last_face_event = "画面内暂无人脸"
         return frame
 
-    def handle_stranger_alarm(self, x, y):
+    def save_stranger_snapshot(self, frame, box):
+        if cv2 is None or frame is None or not self.settings.get("save_intruder_snapshot", True):
+            return None
+        try:
+            os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            filename = f"stranger_{timestamp}.jpg"
+            path = os.path.join(SNAPSHOT_DIR, filename)
+            preview = frame.copy()
+            x, y, w, h = [int(value) for value in box]
+            cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.imwrite(path, preview, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+
+            snapshots = sorted(
+                (os.path.join(SNAPSHOT_DIR, item) for item in os.listdir(SNAPSHOT_DIR) if item.lower().endswith(".jpg")),
+                key=os.path.getmtime,
+                reverse=True
+            )
+            for old_file in snapshots[200:]:
+                try:
+                    os.remove(old_file)
+                except OSError:
+                    pass
+            return f"/static/snapshots/{filename}"
+        except Exception as exc:
+            add_log(f"⚠️ 陌生人抓拍保存失败: {str(exc)[:40]}")
+            return None
+
+    def handle_stranger_alarm(self, x, y, frame=None, box=None):
         alarm_key = f"{x // 50}_{y // 50}"
         now = time.time()
         interval = int(self.settings["alarm_interval"])
         if alarm_key in last_alarm_time and (now - last_alarm_time[alarm_key]) <= interval:
             return
         last_alarm_time[alarm_key] = now
+        snapshot_url = self.save_stranger_snapshot(frame, box or (x, y, 1, 1))
         entry = {
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "level": 1,
@@ -796,10 +828,13 @@ class LabSafetyService:
             "type": "陌生人闯入",
             "message": "人脸识别检测到陌生人"
         }
+        if snapshot_url:
+            entry["snapshot_url"] = snapshot_url
         with data_lock:
             monitor_data["alert_history"].insert(0, entry)
             del monitor_data["alert_history"][60:]
             monitor_data["stranger_alarm_count"] += 1
+            mark_state_dirty()
         self.stranger_alarm_count += 1
         self.last_stranger_time = entry["time"]
         self.last_face_event = "检测到陌生人并生成报警"
