@@ -46,7 +46,7 @@ PUSH_ENABLED = True
 STATE_SAVE_INTERVAL = 8
 SENSOR_HISTORY_INTERVAL = 30
 SENSOR_HISTORY_LIMIT = 720
-ASSET_VERSION = "20260521-front-camera-storage"
+ASSET_VERSION = "20260521-login-bg"
 
 web_app = Flask(__name__, template_folder="templates", static_folder="static")
 web_app.secret_key = "zhixunweishi_secret_key_2024"
