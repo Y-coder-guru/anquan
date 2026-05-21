@@ -3,27 +3,87 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 let browserCameraStream = null;
 let browserCameraTimer = null;
 let sendingFrame = false;
+let frameFailureCount = 0;
 
 async function requestJSON(url, options = {}) {
-    const response = await fetch(url, {
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options
-    });
-    if (response.status === 401) {
-        window.location.href = "/";
-        return null;
+    try {
+        const response = await fetch(url, {
+            ...options,
+            headers: { "Content-Type": "application/json", ...(options.headers || {}) }
+        });
+        if (response.status === 401) {
+            window.location.href = "/";
+            return null;
+        }
+        const text = await response.text();
+        let payload = {};
+        if (text) {
+            try {
+                payload = JSON.parse(text);
+            } catch (error) {
+                payload = { success: false, message: text.slice(0, 120) };
+            }
+        }
+        if (!response.ok) {
+            return {
+                success: false,
+                message: payload.message || `请求失败：HTTP ${response.status}`
+            };
+        }
+        return payload;
+    } catch (error) {
+        const message = `请求失败：${error.message}`;
+        toast(message);
+        return { success: false, message };
     }
-    return response.json();
 }
 
 function toast(message) {
     const node = $("#toast");
     if (!node) return;
-    node.textContent = message;
+    node.textContent = message || "操作完成";
     node.classList.add("show");
     clearTimeout(window.__toastTimer);
-    window.__toastTimer = setTimeout(() => node.classList.remove("show"), 2200);
+    window.__toastTimer = setTimeout(() => node.classList.remove("show"), 4200);
 }
+
+function setCameraHint(message, type = "") {
+    const node = $("#cameraHint");
+    if (!node) return;
+    node.textContent = message;
+    node.className = `camera-hint ${type}`.trim();
+}
+
+function setCameraStateText(message) {
+    const node = $("#cameraState");
+    if (node) node.textContent = message;
+}
+
+function setCameraButtonsBusy(isBusy) {
+    const start = $("#startCameraBtn");
+    const stop = $("#stopCameraBtn");
+    if (start) start.disabled = isBusy;
+    if (stop) stop.disabled = isBusy;
+}
+
+function cameraSecureHelp() {
+    return "当前网页不是安全来源，浏览器会禁止调用这台电脑的摄像头。请用 HTTPS 部署；如果只是在服务器本机测试，请改用 http://localhost:5000 或 http://127.0.0.1:5000。";
+}
+
+window.addEventListener("error", (event) => {
+    if (!$("#view-dashboard")) return;
+    const message = `页面脚本错误：${event.message || "未知错误"}`;
+    setCameraHint(message, "error");
+    toast(message);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+    if (!$("#view-dashboard")) return;
+    const reason = event.reason && event.reason.message ? event.reason.message : String(event.reason || "未知错误");
+    const message = `操作执行失败：${reason}`;
+    setCameraHint(message, "error");
+    toast(message);
+});
 
 function formatDateTime(value) {
     const source = value ? new Date(String(value).replace(" ", "T")) : new Date();
@@ -50,18 +110,35 @@ function isSecureCameraContext() {
 }
 
 async function startBrowserCamera() {
+    frameFailureCount = 0;
+    setCameraButtonsBusy(true);
+    setCameraStateText("正在请求摄像头权限...");
+    setCameraHint("正在检查浏览器摄像头权限。首次打开时请在浏览器弹窗中选择允许。", "warning");
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        toast("当前浏览器不支持摄像头 API");
+        const message = "当前浏览器不支持摄像头 API，请使用新版 Chrome、Edge 或 Firefox。";
+        setCameraStateText("浏览器不支持摄像头");
+        setCameraHint(message, "error");
+        setCameraButtonsBusy(false);
+        toast(message);
         return;
     }
     if (!isSecureCameraContext()) {
-        toast("浏览器摄像头需要 HTTPS，或在本机 localhost 访问");
+        const message = cameraSecureHelp();
+        setCameraStateText("需要 HTTPS 才能打开摄像头");
+        setCameraHint(message, "error");
+        setCameraButtonsBusy(false);
+        toast("摄像头需要 HTTPS 或 localhost");
         return;
     }
 
     const result = await requestJSON("/api/client-camera/start", { method: "POST", body: "{}" });
-    if (!result?.success) {
-        toast(result?.message || "服务器端识别服务启动失败");
+    if (!result || !result.success) {
+        const message = (result && result.message) || "服务器端识别服务启动失败";
+        setCameraStateText("识别服务启动失败");
+        setCameraHint(message, "error");
+        setCameraButtonsBusy(false);
+        toast(message);
         return;
     }
 
@@ -80,14 +157,25 @@ async function startBrowserCamera() {
         $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;
         clearInterval(browserCameraTimer);
         browserCameraTimer = setInterval(sendBrowserFrame, 260);
+        const start = $("#startCameraBtn");
+        const stop = $("#stopCameraBtn");
+        if (start) start.disabled = true;
+        if (stop) stop.disabled = false;
+        setCameraStateText("浏览器摄像头已打开");
+        setCameraHint("摄像头已连接，系统正在把浏览器画面发送到后端进行人脸识别。", "ok");
         toast("浏览器摄像头已打开");
     } catch (error) {
         await requestJSON("/api/camera/stop", { method: "POST", body: "{}" });
-        toast(`摄像头权限被拒绝或不可用：${error.message}`);
+        const message = `摄像头权限被拒绝或不可用：${error.message}`;
+        setCameraStateText("摄像头权限不可用");
+        setCameraHint("请检查浏览器地址栏摄像头权限、系统隐私设置，以及摄像头是否被其他软件占用。", "error");
+        setCameraButtonsBusy(false);
+        toast(message);
     }
 }
 
 function stopBrowserCamera() {
+    frameFailureCount = 0;
     clearInterval(browserCameraTimer);
     browserCameraTimer = null;
     sendingFrame = false;
@@ -99,6 +187,8 @@ function stopBrowserCamera() {
     if (video) video.srcObject = null;
     const streamImage = $("#cameraStream");
     if (streamImage) streamImage.src = `/camera_offline.svg?t=${Date.now()}`;
+    setCameraStateText("未启动");
+    setCameraHint("摄像头已关闭。远程电脑再次打开时仍需要 HTTPS 或 localhost 安全来源。");
 }
 
 async function sendBrowserFrame() {
@@ -130,9 +220,17 @@ async function sendBrowserFrame() {
             }
             const result = await response.json();
             if (result.success && result.image) {
+                frameFailureCount = 0;
                 $("#cameraStream").src = result.image;
+            } else if (frameFailureCount < 3) {
+                frameFailureCount += 1;
+                setCameraHint(result.message || "后端没有返回识别画面，请检查 OpenCV 和摄像头权限。", "error");
             }
         } catch (error) {
+            if (frameFailureCount < 3) {
+                frameFailureCount += 1;
+                setCameraHint(`画面发送失败：${error.message}`, "error");
+            }
             console.warn("client frame failed", error);
         } finally {
             sendingFrame = false;
@@ -141,7 +239,7 @@ async function sendBrowserFrame() {
 }
 
 function esc(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    return String(value == null ? "" : value).replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
         "<": "&lt;",
         ">": "&gt;",
@@ -431,9 +529,17 @@ async function updateDashboard() {
     $("#cameraState").textContent = data.camera_running
         ? `${data.camera_source === "browser" ? "浏览器摄像头" : "服务器摄像头"} · 当前检测 ${data.current_faces} · 陌生人 ${data.unknown_face_count}`
         : (data.camera_error || "未启动");
-    $("#startCameraBtn").disabled = data.camera_running;
-    $("#stopCameraBtn").disabled = !data.camera_running;
-    $("#addFaceBtn").disabled = !data.camera_running;
+    const browserStreamLost = data.camera_running && data.camera_source === "browser" && !browserCameraStream;
+    if (browserStreamLost) {
+        $("#cameraState").textContent = "浏览器画面未连接，请重新打开摄像头";
+        $("#startCameraBtn").disabled = false;
+        $("#stopCameraBtn").disabled = false;
+        $("#addFaceBtn").disabled = true;
+    } else {
+        $("#startCameraBtn").disabled = data.camera_running;
+        $("#stopCameraBtn").disabled = !data.camera_running;
+        $("#addFaceBtn").disabled = !data.camera_running;
+    }
     $("#faceCurrentCount").textContent = data.current_faces;
     $("#knownFaceCount").textContent = data.known_face_count;
     $("#unknownFaceCount").textContent = data.unknown_face_count;
@@ -544,7 +650,7 @@ function initDashboardActions() {
 
     $("#logoutBtn").addEventListener("click", async () => {
         const result = await requestJSON("/api/logout", { method: "POST", body: "{}" });
-        if (result?.redirect) window.location.href = result.redirect;
+        if (result && result.redirect) window.location.href = result.redirect;
     });
 
     $("#startCameraBtn").addEventListener("click", async () => {
@@ -587,7 +693,8 @@ function initDashboardActions() {
     $$("[data-sim]").forEach((button) => {
         button.addEventListener("click", async () => {
             const result = await requestJSON(`/api/simulate/${button.dataset.sim}`, { method: "POST", body: "{}" });
-            if (result?.success) toast("操作已执行");
+            if (result && result.success) toast("操作已执行");
+            if (result && !result.success) toast(result.message || "操作失败");
         });
     });
 
@@ -660,7 +767,7 @@ function initDashboardActions() {
 
     $("#clearLogsBtn").addEventListener("click", async () => {
         const result = await requestJSON("/api/logs", { method: "DELETE" });
-        if (result?.success) {
+        if (result && result.success) {
             toast("日志已清空");
             loadLogs();
         }

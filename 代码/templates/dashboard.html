@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智巡卫士 - Web 控制台</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=asset_version) }}">
 </head>
 <body class="app-body">
 <div class="app-shell">
@@ -130,6 +130,9 @@
                         <button class="ghost-btn" id="startCameraBtn" type="button">打开摄像头</button>
                         <button class="ghost-btn" id="stopCameraBtn" type="button">关闭摄像头</button>
                         <span id="cameraState">未启动</span>
+                    </div>
+                    <div class="camera-hint" id="cameraHint">
+                        远程电脑打开摄像头需要 HTTPS；如果在本机测试，请使用 localhost 或 127.0.0.1。
                     </div>
                     <div class="face-event" id="faceEvent">暂无人脸事件</div>
                     <div class="face-detect-list" id="faceDetectList"></div>
@@ -266,6 +269,6 @@
     </main>
 </div>
 <div class="toast" id="toast"></div>
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js', v=asset_version) }}"></script>
 </body>
 </html>

@@ -660,6 +660,34 @@ select:focus {
     color: var(--muted);
 }
 
+.camera-hint {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: rgba(38, 215, 208, 0.08);
+    border: 1px solid rgba(38, 215, 208, 0.24);
+    color: #b6d8e8;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.camera-hint.warning {
+    background: rgba(241, 182, 72, 0.10);
+    border-color: rgba(241, 182, 72, 0.36);
+    color: #ffd88a;
+}
+
+.camera-hint.error {
+    background: rgba(239, 93, 93, 0.10);
+    border-color: rgba(239, 93, 93, 0.36);
+    color: #ffabab;
+}
+
+.camera-hint.ok {
+    background: rgba(34, 199, 122, 0.10);
+    border-color: rgba(34, 199, 122, 0.32);
+    color: #a7f0c9;
+}
+
 .face-stat-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -45,6 +45,7 @@ PUSH_ENABLED = True
 STATE_SAVE_INTERVAL = 8
 SENSOR_HISTORY_INTERVAL = 30
 SENSOR_HISTORY_LIMIT = 720
+ASSET_VERSION = "20260521-camera-fix"
 
 web_app = Flask(__name__, template_folder="templates", static_folder="static")
 web_app.secret_key = "zhixunweishi_secret_key_2024"
@@ -979,14 +980,19 @@ def login_required(handler):
 def index():
     if "username" in session:
         return redirect(url_for("dashboard"))
-    return render_template("login.html")
+    return render_template("login.html", asset_version=ASSET_VERSION)
 
 
 @web_app.route("/dashboard")
 def dashboard():
     if "username" not in session:
         return redirect(url_for("index"))
-    return render_template("dashboard.html", username=session["username"], role=session.get("role", "实验人员"))
+    return render_template(
+        "dashboard.html",
+        username=session["username"],
+        role=session.get("role", "实验人员"),
+        asset_version=ASSET_VERSION
+    )
 
 
 @web_app.route("/api/login", methods=["POST"])
