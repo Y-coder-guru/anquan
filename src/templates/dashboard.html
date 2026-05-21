@@ -114,6 +114,7 @@
                     <div class="video-box">
                         <img id="cameraStream" alt="人脸监控视频流" src="{{ url_for('camera_offline') }}">
                         <video id="localCameraVideo" autoplay playsinline muted hidden></video>
+                        <canvas id="faceOverlayCanvas" hidden></canvas>
                         <canvas id="clientFrameCanvas" width="640" height="480" hidden></canvas>
                     </div>
                     <div class="face-stat-grid">

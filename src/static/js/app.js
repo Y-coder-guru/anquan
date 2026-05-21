@@ -4,6 +4,10 @@ let browserCameraStream = null;
 let browserCameraTimer = null;
 let sendingFrame = false;
 let frameFailureCount = 0;
+let activeCameraMode = "none";
+const CAMERA_ANALYSIS_MAX_WIDTH = 420;
+const CAMERA_ANALYSIS_INTERVAL_MS = 320;
+const CAMERA_JPEG_QUALITY = 0.55;
 
 async function requestJSON(url, options = {}) {
     try {
@@ -66,6 +70,129 @@ function setCameraButtonsBusy(isBusy) {
     if (stop) stop.disabled = isBusy;
 }
 
+function clearFaceOverlay() {
+    const overlay = $("#faceOverlayCanvas");
+    if (!overlay) return;
+    const ctx = overlay.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, overlay.width || 0, overlay.height || 0);
+}
+
+function setBrowserPreviewActive(isActive) {
+    const streamImage = $("#cameraStream");
+    const video = $("#localCameraVideo");
+    const overlay = $("#faceOverlayCanvas");
+    if (streamImage) streamImage.hidden = isActive;
+    if (video) video.hidden = !isActive;
+    if (overlay) overlay.hidden = !isActive;
+    if (!isActive) clearFaceOverlay();
+}
+
+function stopBrowserPreview() {
+    frameFailureCount = 0;
+    clearInterval(browserCameraTimer);
+    browserCameraTimer = null;
+    sendingFrame = false;
+    if (browserCameraStream) {
+        browserCameraStream.getTracks().forEach((track) => track.stop());
+        browserCameraStream = null;
+    }
+    const video = $("#localCameraVideo");
+    if (video) video.srcObject = null;
+    setBrowserPreviewActive(false);
+}
+
+async function startServerCamera(reason = "") {
+    stopBrowserPreview();
+    setCameraButtonsBusy(true);
+    setCameraStateText("正在打开服务端摄像头...");
+    setCameraHint(reason || "正在通过服务器端 OpenCV 打开摄像头。", reason ? "warning" : "");
+
+    const result = await requestJSON("/api/camera/start", { method: "POST", body: "{}" });
+    if (result && result.success) {
+        activeCameraMode = "server";
+        const streamImage = $("#cameraStream");
+        if (streamImage) {
+            streamImage.hidden = false;
+            streamImage.src = `/video_feed?t=${Date.now()}`;
+        }
+        const start = $("#startCameraBtn");
+        const stop = $("#stopCameraBtn");
+        if (start) start.disabled = true;
+        if (stop) stop.disabled = false;
+        setCameraStateText("服务端摄像头已打开");
+        setCameraHint(reason ? `${reason} 已切换到服务端摄像头。` : "服务端摄像头已连接。", "ok");
+        toast(result.message || "摄像头已打开");
+        return true;
+    }
+
+    activeCameraMode = "none";
+    setCameraButtonsBusy(false);
+    const message = (result && result.message) || "服务端摄像头打开失败";
+    setCameraStateText("摄像头打开失败");
+    setCameraHint(`${reason ? `${reason} ` : ""}${message}`, "error");
+    toast(message);
+    return false;
+}
+
+function drawFaceOverlay(faces = [], sourceWidth = 1, sourceHeight = 1) {
+    const overlay = $("#faceOverlayCanvas");
+    const video = $("#localCameraVideo");
+    if (!overlay || overlay.hidden || !video) return;
+
+    const rect = overlay.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = Math.round(rect.width * dpr);
+    overlay.height = Math.round(rect.height * dpr);
+
+    const ctx = overlay.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    const naturalWidth = video.videoWidth || sourceWidth;
+    const naturalHeight = video.videoHeight || sourceHeight;
+    const naturalRatio = naturalWidth / Math.max(1, naturalHeight);
+    const boxRatio = rect.width / Math.max(1, rect.height);
+    let drawWidth = rect.width;
+    let drawHeight = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (boxRatio > naturalRatio) {
+        drawHeight = rect.height;
+        drawWidth = drawHeight * naturalRatio;
+        offsetX = (rect.width - drawWidth) / 2;
+    } else {
+        drawWidth = rect.width;
+        drawHeight = drawWidth / naturalRatio;
+        offsetY = (rect.height - drawHeight) / 2;
+    }
+
+    const scaleX = drawWidth / Math.max(1, sourceWidth);
+    const scaleY = drawHeight / Math.max(1, sourceHeight);
+    ctx.lineWidth = 2;
+    ctx.font = "13px Microsoft YaHei, Arial, sans-serif";
+
+    faces.forEach((face) => {
+        const box = face.box || [];
+        if (box.length < 4) return;
+        const [x, y, w, h] = box.map(Number);
+        const isStranger = face.label === "STRANGER" || String(face.status || "").includes("陌生");
+        const color = isStranger ? "#ef5d5d" : "#22c77a";
+        const left = offsetX + x * scaleX;
+        const top = offsetY + y * scaleY;
+        const width = w * scaleX;
+        const height = h * scaleY;
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.strokeRect(left, top, width, height);
+        const label = face.label || face.status || "FACE";
+        const labelY = Math.max(18, top - 6);
+        ctx.fillText(label, left, labelY);
+    });
+}
+
 function cameraSecureHelp() {
     return "当前网页不是安全来源，浏览器会禁止调用这台电脑的摄像头。请用 HTTPS 部署；如果只是在服务器本机测试，请改用 http://localhost:5000 或 http://127.0.0.1:5000。";
 }
@@ -116,30 +243,16 @@ async function startBrowserCamera() {
     setCameraHint("正在检查浏览器摄像头权限。首次打开时请在浏览器弹窗中选择允许。", "warning");
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        const message = "当前浏览器不支持摄像头 API，请使用新版 Chrome、Edge 或 Firefox。";
-        setCameraStateText("浏览器不支持摄像头");
-        setCameraHint(message, "error");
-        setCameraButtonsBusy(false);
-        toast(message);
-        return;
+        return startServerCamera("当前浏览器不支持摄像头 API。");
     }
     if (!isSecureCameraContext()) {
-        const message = cameraSecureHelp();
-        setCameraStateText("需要 HTTPS 才能打开摄像头");
-        setCameraHint(message, "error");
-        setCameraButtonsBusy(false);
-        toast("摄像头需要 HTTPS 或 localhost");
-        return;
+        return startServerCamera(cameraSecureHelp());
     }
 
     const result = await requestJSON("/api/client-camera/start", { method: "POST", body: "{}" });
     if (!result || !result.success) {
         const message = (result && result.message) || "服务器端识别服务启动失败";
-        setCameraStateText("识别服务启动失败");
-        setCameraHint(message, "error");
-        setCameraButtonsBusy(false);
-        toast(message);
-        return;
+        return startServerCamera(message);
     }
 
     try {
@@ -147,16 +260,19 @@ async function startBrowserCamera() {
             video: {
                 facingMode: "user",
                 width: { ideal: 640 },
-                height: { ideal: 480 }
+                height: { ideal: 480 },
+                frameRate: { ideal: 30, max: 30 }
             },
             audio: false
         });
         const video = $("#localCameraVideo");
         video.srcObject = browserCameraStream;
         await video.play();
+        activeCameraMode = "browser";
+        setBrowserPreviewActive(true);
         $("#cameraStream").src = `/camera_offline.svg?t=${Date.now()}`;
         clearInterval(browserCameraTimer);
-        browserCameraTimer = setInterval(sendBrowserFrame, 260);
+        browserCameraTimer = setInterval(sendBrowserFrame, CAMERA_ANALYSIS_INTERVAL_MS);
         const start = $("#startCameraBtn");
         const stop = $("#stopCameraBtn");
         if (start) start.disabled = true;
@@ -166,25 +282,16 @@ async function startBrowserCamera() {
         toast("浏览器摄像头已打开");
     } catch (error) {
         await requestJSON("/api/camera/stop", { method: "POST", body: "{}" });
+        activeCameraMode = "none";
+        stopBrowserPreview();
         const message = `摄像头权限被拒绝或不可用：${error.message}`;
-        setCameraStateText("摄像头权限不可用");
-        setCameraHint("请检查浏览器地址栏摄像头权限、系统隐私设置，以及摄像头是否被其他软件占用。", "error");
-        setCameraButtonsBusy(false);
-        toast(message);
+        await startServerCamera(message);
     }
 }
 
 function stopBrowserCamera() {
-    frameFailureCount = 0;
-    clearInterval(browserCameraTimer);
-    browserCameraTimer = null;
-    sendingFrame = false;
-    if (browserCameraStream) {
-        browserCameraStream.getTracks().forEach((track) => track.stop());
-        browserCameraStream = null;
-    }
-    const video = $("#localCameraVideo");
-    if (video) video.srcObject = null;
+    activeCameraMode = "none";
+    stopBrowserPreview();
     const streamImage = $("#cameraStream");
     if (streamImage) streamImage.src = `/camera_offline.svg?t=${Date.now()}`;
     setCameraStateText("未启动");
@@ -198,8 +305,11 @@ async function sendBrowserFrame() {
     if (!video || !canvas || video.readyState < 2) return;
 
     sendingFrame = true;
-    const width = video.videoWidth || 640;
-    const height = video.videoHeight || 480;
+    const sourceWidth = video.videoWidth || 640;
+    const sourceHeight = video.videoHeight || 480;
+    const scale = Math.min(1, CAMERA_ANALYSIS_MAX_WIDTH / sourceWidth);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
@@ -213,7 +323,7 @@ async function sendBrowserFrame() {
         const formData = new FormData();
         formData.append("frame", blob, "frame.jpg");
         try {
-            const response = await fetch("/api/client-frame", { method: "POST", body: formData });
+            const response = await fetch("/api/client-frame?preview=0", { method: "POST", body: formData });
             if (response.status === 401) {
                 window.location.href = "/";
                 return;
@@ -222,6 +332,10 @@ async function sendBrowserFrame() {
             if (result.success && result.image) {
                 frameFailureCount = 0;
                 $("#cameraStream").src = result.image;
+                drawFaceOverlay(result.faces || [], result.frame_width || width, result.frame_height || height);
+            } else if (result.success) {
+                frameFailureCount = 0;
+                drawFaceOverlay(result.faces || [], result.frame_width || width, result.frame_height || height);
             } else if (frameFailureCount < 3) {
                 frameFailureCount += 1;
                 setCameraHint(result.message || "后端没有返回识别画面，请检查 OpenCV 和摄像头权限。", "error");
@@ -235,7 +349,7 @@ async function sendBrowserFrame() {
         } finally {
             sendingFrame = false;
         }
-    }, "image/jpeg", 0.72);
+    }, "image/jpeg", CAMERA_JPEG_QUALITY);
 }
 
 function esc(value) {
@@ -529,6 +643,15 @@ async function updateDashboard() {
     $("#cameraState").textContent = data.camera_running
         ? `${data.camera_source === "browser" ? "浏览器摄像头" : "服务器摄像头"} · 当前检测 ${data.current_faces} · 陌生人 ${data.unknown_face_count}`
         : (data.camera_error || "未启动");
+    if (data.camera_running && data.camera_source === "server") {
+        activeCameraMode = "server";
+        stopBrowserPreview();
+        const streamImage = $("#cameraStream");
+        if (streamImage && !streamImage.src.includes("/video_feed")) {
+            streamImage.hidden = false;
+            streamImage.src = `/video_feed?t=${Date.now()}`;
+        }
+    }
     const browserStreamLost = data.camera_running && data.camera_source === "browser" && !browserCameraStream;
     if (browserStreamLost) {
         $("#cameraState").textContent = "浏览器画面未连接，请重新打开摄像头";
@@ -692,9 +815,17 @@ function initDashboardActions() {
 
     $$("[data-sim]").forEach((button) => {
         button.addEventListener("click", async () => {
-            const result = await requestJSON(`/api/simulate/${button.dataset.sim}`, { method: "POST", body: "{}" });
-            if (result && result.success) toast("操作已执行");
-            if (result && !result.success) toast(result.message || "操作失败");
+            button.disabled = true;
+            try {
+                const result = await requestJSON(`/api/simulate/${button.dataset.sim}`, { method: "POST", body: "{}" });
+                if (result && result.success) {
+                    toast(result.message || "操作已执行");
+                    await updateDashboard();
+                }
+                if (result && !result.success) toast(result.message || "操作失败");
+            } finally {
+                button.disabled = false;
+            }
         });
     });
 

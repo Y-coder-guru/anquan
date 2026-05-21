@@ -45,7 +45,7 @@ PUSH_ENABLED = True
 STATE_SAVE_INTERVAL = 8
 SENSOR_HISTORY_INTERVAL = 30
 SENSOR_HISTORY_LIMIT = 720
-ASSET_VERSION = "20260521-camera-fix"
+ASSET_VERSION = "20260521-camera-fallback"
 
 web_app = Flask(__name__, template_folder="templates", static_folder="static")
 web_app.secret_key = "zhixunweishi_secret_key_2024"
@@ -632,6 +632,8 @@ class LabSafetyService:
 
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.camera = cap
         self.camera_running = True
@@ -682,25 +684,28 @@ class LabSafetyService:
         add_log("📷 摄像头已关闭")
         return True, "摄像头已关闭"
 
-    def process_client_frame(self, frame_bytes):
+    def process_client_frame(self, frame_bytes, include_image=True):
         if cv2 is None or np is None:
-            return False, "服务器未安装 OpenCV", None
+            return False, "服务器未安装 OpenCV", None, 0, 0
         if not self.camera_running or self.camera_source != "browser":
             ok, message = self.start_client_camera()
             if not ok:
-                return False, message, None
+                return False, message, None, 0, 0
         image_array = np.frombuffer(frame_bytes, dtype=np.uint8)
         frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
         if frame is None:
-            return False, "浏览器画面解码失败", None
+            return False, "浏览器画面解码失败", None, 0, 0
         processed = self.process_face_frame(frame)
         with self.camera_lock:
             self.latest_frame = processed
-        ok, buffer = cv2.imencode(".jpg", processed)
+        height, width = processed.shape[:2]
+        if not include_image:
+            return True, "ok", None, width, height
+        ok, buffer = cv2.imencode(".jpg", processed, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ok:
-            return False, "识别画面编码失败", None
+            return False, "识别画面编码失败", None, width, height
         image_data = base64.b64encode(buffer.tobytes()).decode("ascii")
-        return True, "ok", f"data:image/jpeg;base64,{image_data}"
+        return True, "ok", f"data:image/jpeg;base64,{image_data}", width, height
 
     def camera_loop(self):
         while self.camera_running:
@@ -719,9 +724,21 @@ class LabSafetyService:
                 self.latest_frame = processed
             time.sleep(0.03)
 
+    @staticmethod
+    def expand_face_box(x, y, w, h, frame_width, frame_height):
+        pad_x = int(w * 0.24)
+        pad_top = int(h * 0.30)
+        pad_bottom = int(h * 0.22)
+        left = max(0, x - pad_x)
+        top = max(0, y - pad_top)
+        right = min(frame_width, x + w + pad_x)
+        bottom = min(frame_height, y + h + pad_bottom)
+        return left, top, max(1, right - left), max(1, bottom - top)
+
     def process_face_frame(self, frame):
         if cv2 is None:
             return frame
+        frame_height, frame_width = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, 1.1, 5) if self.face_cascade is not None else []
         self.current_face_count = len(faces)
@@ -733,6 +750,7 @@ class LabSafetyService:
         for index, (x, y, w, h) in enumerate(faces):
             face_roi = gray[y:y + h, x:x + w]
             face_feature = extract_face_feature(face_roi)
+            box_x, box_y, box_w, box_h = self.expand_face_box(x, y, w, h, frame_width, frame_height)
             if index == 0 and face_feature is not None:
                 self.latest_face_feature = face_feature.copy()
             name, _score = identify_face(face_feature)
@@ -750,10 +768,10 @@ class LabSafetyService:
             detected_faces.append({
                 "label": label,
                 "status": status,
-                "box": [int(x), int(y), int(w), int(h)]
+                "box": [int(box_x), int(box_y), int(box_w), int(box_h)]
             })
-            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-            cv2.putText(frame, label, (x, max(y - 8, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            cv2.rectangle(frame, (box_x, box_y), (box_x + box_w, box_y + box_h), color, 2)
+            cv2.putText(frame, label, (box_x, max(box_y - 8, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         info = f"Members: {len(face_members)}  Faces: {self.current_face_count}"
         cv2.putText(frame, info, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
@@ -796,7 +814,7 @@ class LabSafetyService:
                 frame = None if self.latest_frame is None else self.latest_frame.copy()
             if frame is None:
                 frame = self.placeholder_frame()
-            ok, buffer = cv2.imencode(".jpg", frame)
+            ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
             if ok:
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
             time.sleep(0.06)
@@ -1166,10 +1184,17 @@ def api_client_frame():
     frame_file = request.files.get("frame")
     if frame_file is None:
         return jsonify({"success": False, "message": "未收到摄像头画面"}), 400
-    success, message, image = service.process_client_frame(frame_file.read())
-    payload = {"success": success, "message": message}
+    include_image = request.args.get("preview") != "0"
+    success, message, image, frame_width, frame_height = service.process_client_frame(frame_file.read(), include_image)
+    payload = {
+        "success": success,
+        "message": message,
+        "frame_width": frame_width,
+        "frame_height": frame_height
+    }
     if image:
         payload["image"] = image
+    if success:
         payload["faces"] = service.detected_faces
         payload["current_faces"] = service.current_face_count
         payload["known_face_count"] = service.known_face_count
@@ -1268,27 +1293,52 @@ def camera_offline():
 @web_app.route("/api/simulate/<mode>", methods=["POST"])
 @login_required
 def api_simulate(mode):
+    message = "操作已执行"
+    accident_info = None
     with data_lock:
         if mode == "fire":
             monitor_data["smoke"] = 35
             add_log("🔥 模拟室内火灾: 烟雾35%")
+            message = "已触发室内火灾模拟"
         elif mode == "reactor":
             monitor_data["reactor_temp"] = 95
             add_log("⚗️ 模拟反应釜火灾: 釜温95℃")
+            message = "已触发反应釜火灾模拟"
         elif mode == "gas":
             monitor_data["gas_ch4"] = 8000
             add_log("💨 模拟瓦斯泄漏: CH₄浓度8000ppm")
+            message = "已触发瓦斯泄漏模拟"
         elif mode == "reset":
             monitor_data.update({
                 "room_temp": 25.0, "humidity": 45, "smoke": 0, "voc": 50,
                 "reactor_temp": 45, "reactor_pressure": 0.5,
                 "gas_ch4": 0, "gas_h2": 0, "gas_co": 0, "gas_h2s": 0
             })
-            service.current_level = -1
             add_log("✅ 系统已恢复正常")
+            message = "系统已恢复正常"
         else:
             return jsonify({"success": False, "message": "未知模拟类型"}), 400
-    return jsonify({"success": True})
+
+        sensors = {key: monitor_data[key] for key in (
+            "room_temp", "smoke", "voc", "gas_ch4", "gas_h2", "gas_co", "gas_h2s",
+            "reactor_temp", "reactor_pressure"
+        )}
+        accident_info = evaluate_accident(sensors)
+        service.current_level = -1
+        service.current_accident = "__simulation__"
+
+    if accident_info:
+        level, _key, rule = accident_info
+        service.set_risk(level, rule["name"], rule["actions"], rule.get("fire_suppression"), rule.get("sequence", []))
+    else:
+        service.set_risk(0, "无", [], None, NORMAL_SEQUENCE)
+
+    return jsonify({
+        "success": True,
+        "message": message,
+        "risk_level": monitor_data.get("risk_level", 0),
+        "accident_type": monitor_data.get("accident_type", "无")
+    })
 
 
 def main():
